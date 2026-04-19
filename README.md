@@ -138,8 +138,9 @@ src/
 | `OPENCLAW_GATEWAY_URL` | `http://127.0.0.1:18789` | OpenClaw OpenAI-compatible gateway base URL |
 | `OPENCLAW_GATEWAY_TOKEN` | — | Bearer token for gateway. **Required** when dual-brain enabled |
 | `CORPUS_CALLOSUM_ENABLED` | true | Dual-brain kill-switch. `false` → always single-brain |
-| `OPENCLAW_CHAT_MODEL_RIGHT` | `gpt-5.4 codex` | Model name sent to OpenClaw gateway for right hemisphere |
+| `OPENCLAW_CHAT_MODEL_RIGHT` | `openai-codex/gpt-5.4` | OpenClaw path-style model ID for the right hemisphere |
 | `CORPUS_CALLOSUM_TIMEOUT_MS` | 90000 | Per-hemisphere-call timeout |
+| `CORPUS_CLINICAL_OVERRIDE` | false | Force every natural message to single-brain Claude (PHI belt-and-suspenders) |
 | `WORKSPACE_DIR` | `~/.openclaw/workspace` | OpenClaw workspace root |
 | `DELIVERY_QUEUE_DIR` | `~/.openclaw/delivery-queue` | Spool dir for failed deliveries |
 
@@ -415,14 +416,14 @@ jarvis-prime and OpenClaw cannot both poll @trippassistant_bot simultaneously (T
 |----|--------|----------|
 | AC2: All 5 LLM calls logged | PASS | `callosum_pass1_*`, `callosum_pass2_*`, `callosum_integration_*` events |
 | AC3: Slash commands behave identically | PASS | `processor.test.ts` slash bypass case + existing tests unchanged |
-| AC4: Clinical path → single-brain only | PASS | `clinicalOverride` test; orchestrator not called |
+| AC4: Clinical path → single-brain only | PASS | `clinicalOverride` test + Wave 5 S5 live smoke (CORPUS_CLINICAL_OVERRIDE=true → `classification kind=clinical` → 0 right_hemisphere events) |
 | AC5: Missing gateway token → startup fails | PASS | `config.test.ts` superRefine case |
 | AC6: jarvis-toggle round-trip | PASS | Unmodified from v1 |
 | AC7: History contains only final response | PASS | Canary test — `P1-LEFT-SECRET-A` / `P1-RIGHT-SECRET-B` never in jsonl |
 | AC8: GPT is meta-aware | PASS | `right-affordance-suffix` hardcoded |
 | AC9: Both hemispheres read same history | PASS | Orchestrator tests |
-| AC10: Right failure → Telegram error | PASS | `RightHemisphereError` test |
-| AC11: All existing tests still pass | PASS | 66 legacy tests green |
+| AC10: Right failure → Telegram error | PASS | `RightHemisphereError` test + Wave 5 S3 live smoke (unreachable gateway URL → `right_hemisphere_network_error` → Telegram error) |
+| AC11: All existing tests still pass | PASS | 66 legacy tests green + Wave 5 S4 live smoke (CORPUS_CALLOSUM_ENABLED=false → single-brain fallback) |
 | AC12: New test suite covers dual-brain | PASS | 14 orchestrator + 12 processor-integration tests |
 | AC1: Visibly differs from Claude-alone | PASS | Wave 5 S1 smoke — 74.2s, 5 calls (L-p1 34.9s / R-p1 10.6s / L-p2 24.7s / R-p2 11.1s / integration 14.7s), 1624-char integrated response on "Tononi IIT vs Gibson" — synthesis + Tripp-specific callback visible in output |
 

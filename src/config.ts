@@ -35,6 +35,7 @@ const baseSchema = z.object({
   CORPUS_CALLOSUM_ENABLED: boolFromEnv(true),
   OPENCLAW_CHAT_MODEL_RIGHT: z.string().default("gpt-5.4 codex"),
   CORPUS_CALLOSUM_TIMEOUT_MS: z.coerce.number().default(90_000),
+  CORPUS_CLINICAL_OVERRIDE: boolFromEnv(false),
 });
 
 /**

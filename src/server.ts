@@ -41,6 +41,7 @@ export function buildServer(config: Config): ServerContext {
       gatewayToken: config.OPENCLAW_GATEWAY_TOKEN,
       rightModel: config.OPENCLAW_CHAT_MODEL_RIGHT,
       corpusCallosumTimeoutMs: config.CORPUS_CALLOSUM_TIMEOUT_MS,
+      clinicalOverride: config.CORPUS_CLINICAL_OVERRIDE,
     },
     deliver,
     server.log,
