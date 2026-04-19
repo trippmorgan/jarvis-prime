@@ -5,7 +5,7 @@ Jarvis Prime is the central brain for the Jarvis network. It bridges Telegram wi
 **v1:** single-brain Claude Code bridge (complete 2026-04-16).
 **v1.1 — corpus-callosum:** Gibsonian dual-brain extension (Waves 1–4 complete 2026-04-18). Every natural-language message is now processed by two LLM hemispheres working in parallel through a "corpus callosum" — left (Claude, 51% dominant) = logical/structural, right (gpt-5.4 codex via OpenClaw gateway) = holistic/creative. Claude integrates the final response with dissent silently merged.
 
-**Status:** 216 tests passing across 19 test files (Wave 5 T16 e2e smoke added). `tsc` + `npm run build` clean. AC v1.1 AC1 (visibly differs from Claude-alone) awaits live Telegram smoke test — see `.planning/SMOKE.md`.
+**Status:** 216 tests passing across 19 test files. `tsc` + `npm run build` clean. Live dual-brain smoke test S1 passed 2026-04-18 (74.2s, 5 LLM calls, integrated synthesis on Tononi/Gibson).
 
 ## Architecture
 
@@ -424,7 +424,7 @@ jarvis-prime and OpenClaw cannot both poll @trippassistant_bot simultaneously (T
 | AC10: Right failure → Telegram error | PASS | `RightHemisphereError` test |
 | AC11: All existing tests still pass | PASS | 66 legacy tests green |
 | AC12: New test suite covers dual-brain | PASS | 14 orchestrator + 12 processor-integration tests |
-| AC1: Visibly differs from Claude-alone | PENDING | Wave 5 manual smoke test |
+| AC1: Visibly differs from Claude-alone | PASS | Wave 5 S1 smoke — 74.2s, 5 calls (L-p1 34.9s / R-p1 10.6s / L-p2 24.7s / R-p2 11.1s / integration 14.7s), 1624-char integrated response on "Tononi IIT vs Gibson" — synthesis + Tripp-specific callback visible in output |
 
 ## Planning Artifacts
 
