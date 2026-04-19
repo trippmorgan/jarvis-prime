@@ -415,10 +415,10 @@ jarvis-prime and OpenClaw cannot both poll @trippassistant_bot simultaneously (T
 | AC | Status | Evidence |
 |----|--------|----------|
 | AC2: All 5 LLM calls logged | PASS | `callosum_pass1_*`, `callosum_pass2_*`, `callosum_integration_*` events |
-| AC3: Slash commands behave identically | PASS | `processor.test.ts` slash bypass case + existing tests unchanged |
+| AC3: Slash commands behave identically | PASS | `processor.test.ts` slash bypass case + Wave 5 S2 live smoke (`/toggle status` → `classification kind=slash` → `route_bypass` → `single_brain_call` → `process_end path=single_brain`, zero hemisphere events) |
 | AC4: Clinical path → single-brain only | PASS | `clinicalOverride` test + Wave 5 S5 live smoke (CORPUS_CLINICAL_OVERRIDE=true → `classification kind=clinical` → 0 right_hemisphere events) |
 | AC5: Missing gateway token → startup fails | PASS | `config.test.ts` superRefine case |
-| AC6: jarvis-toggle round-trip | PASS | Unmodified from v1 |
+| AC6: jarvis-toggle round-trip | PASS | Unmodified from v1 + Wave 5 S6 live smoke (openclaw→prime→openclaw→prime sequence clean, conv-history.jsonl md5 unchanged pre/post, zero 409 Conflict errors, post-toggle e2e message completed `process_end path=single_brain outcome=success`) |
 | AC7: History contains only final response | PASS | Canary test — `P1-LEFT-SECRET-A` / `P1-RIGHT-SECRET-B` never in jsonl |
 | AC8: GPT is meta-aware | PASS | `right-affordance-suffix` hardcoded |
 | AC9: Both hemispheres read same history | PASS | Orchestrator tests |
