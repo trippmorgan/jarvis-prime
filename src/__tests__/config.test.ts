@@ -20,6 +20,8 @@ const KEYS = [
   'CORPUS_CALLOSUM_ENABLED',
   'OPENCLAW_CHAT_MODEL_RIGHT',
   'CORPUS_CALLOSUM_TIMEOUT_MS',
+  'CORPUS_CLINICAL_OVERRIDE',
+  'JARVIS_EVOLVING_MESSAGE_ENABLED',
 ] as const
 
 let savedEnv: Record<string, string | undefined>
@@ -73,6 +75,28 @@ describe('loadConfig defaults', () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = 'test-token'
     const cfg = loadConfig()
     expect(cfg.CORPUS_CALLOSUM_TIMEOUT_MS).toBe(90_000)
+  })
+
+  it('defaults JARVIS_EVOLVING_MESSAGE_ENABLED to true (W6-T1)', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    const cfg = loadConfig()
+    expect(cfg.JARVIS_EVOLVING_MESSAGE_ENABLED).toBe(true)
+  })
+})
+
+describe('loadConfig JARVIS_EVOLVING_MESSAGE_ENABLED (W6-T1)', () => {
+  it('parses "false" as false', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.JARVIS_EVOLVING_MESSAGE_ENABLED = 'false'
+    const cfg = loadConfig()
+    expect(cfg.JARVIS_EVOLVING_MESSAGE_ENABLED).toBe(false)
+  })
+
+  it('parses "true" as true', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.JARVIS_EVOLVING_MESSAGE_ENABLED = 'true'
+    const cfg = loadConfig()
+    expect(cfg.JARVIS_EVOLVING_MESSAGE_ENABLED).toBe(true)
   })
 })
 

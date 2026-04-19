@@ -36,6 +36,7 @@ const baseSchema = z.object({
   OPENCLAW_CHAT_MODEL_RIGHT: z.string().default("gpt-5.4 codex"),
   CORPUS_CALLOSUM_TIMEOUT_MS: z.coerce.number().default(90_000),
   CORPUS_CLINICAL_OVERRIDE: boolFromEnv(false),
+  JARVIS_EVOLVING_MESSAGE_ENABLED: boolFromEnv(true),
 });
 
 /**
