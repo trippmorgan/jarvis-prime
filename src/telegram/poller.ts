@@ -99,6 +99,106 @@ export class TelegramPoller {
     }
   }
 
+  async sendMessageAndGetId(chatId: string, text: string, parseMode?: string): Promise<number | null> {
+    try {
+      const body: Record<string, unknown> = { chat_id: chatId, text }
+      if (parseMode) body.parse_mode = parseMode
+
+      const res = await fetch(`${this.apiBase}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => `HTTP ${res.status}`)
+        this.log.error({ chatId, status: res.status, error: errText }, 'sendMessageAndGetId failed')
+        return null
+      }
+
+      const data = (await res.json()) as { ok: boolean; result?: { message_id: number } }
+      if (!data.ok || !data.result || typeof data.result.message_id !== 'number') {
+        this.log.error({ chatId }, 'sendMessageAndGetId: unexpected response shape')
+        return null
+      }
+
+      return data.result.message_id
+    } catch (err) {
+      this.log.error(
+        { chatId, error: err instanceof Error ? err.message : String(err) },
+        'sendMessageAndGetId error',
+      )
+      return null
+    }
+  }
+
+  async editMessageText(chatId: string, messageId: number, text: string): Promise<boolean> {
+    try {
+      const body = { chat_id: chatId, message_id: messageId, text }
+
+      const res = await fetch(`${this.apiBase}/editMessageText`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => `HTTP ${res.status}`)
+
+        if (
+          res.status === 400 &&
+          (errText.includes('message is not modified') || errText.includes('chat not found'))
+        ) {
+          this.log.warn({ chatId, messageId, status: res.status }, 'editMessageText swallowed benign 400')
+          return false
+        }
+
+        this.log.error({ chatId, messageId, status: res.status, error: errText }, 'editMessageText failed')
+        return false
+      }
+
+      return true
+    } catch (err) {
+      this.log.error(
+        { chatId, messageId, error: err instanceof Error ? err.message : String(err) },
+        'editMessageText error',
+      )
+      return false
+    }
+  }
+
+  async sendChatAction(chatId: string, action: string): Promise<boolean> {
+    try {
+      const body = { chat_id: chatId, action }
+
+      const res = await fetch(`${this.apiBase}/sendChatAction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => `HTTP ${res.status}`)
+
+        if (res.status === 400) {
+          this.log.warn({ chatId, action, error: errText }, 'sendChatAction swallowed 400')
+          return false
+        }
+
+        this.log.error({ chatId, action, status: res.status, error: errText }, 'sendChatAction failed')
+        return false
+      }
+
+      return true
+    } catch (err) {
+      this.log.error(
+        { chatId, action, error: err instanceof Error ? err.message : String(err) },
+        'sendChatAction error',
+      )
+      return false
+    }
+  }
+
   private async poll(): Promise<void> {
     this.abortController = new AbortController()
     const timeout = setTimeout(() => this.abortController?.abort(), (this.pollTimeout + 5) * 1000)
