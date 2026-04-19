@@ -5,7 +5,7 @@ import type { QueueMessage } from '../queue/types.js'
 import { scanText } from '../phi/scanner.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
-import { classifyMessage } from '../brain/router.js'
+import { classifyMessage, type MessageKind } from '../brain/router.js'
 import { corpusCallosum } from '../brain/corpus-callosum.js'
 import { LeftHemisphereClient } from '../brain/left-hemisphere.js'
 import { RightHemisphereClient } from '../brain/right-hemisphere.js'
@@ -15,6 +15,15 @@ import {
   IntegrationError,
   type BrainResult,
 } from '../brain/types.js'
+import {
+  INITIAL_ACK_LABEL,
+  phaseLabelForEvent,
+  type OrchestratorKind,
+} from '../brain/phase-labels.js'
+import {
+  TelegramResponder,
+  type TelegramSendSurface,
+} from '../telegram/responder.js'
 
 const ACK_DELAY_MS = 8_000
 const HARD_TIMEOUT_MS = 300_000
@@ -34,6 +43,8 @@ export type OrchestratorFn = (input: {
   userMsg: string
   history: HistoryEntry[]
   basePrompt: string
+  /** Optional phase-event callback used by the evolving-message UX. */
+  onEvent?: (eventName: string) => void
 }) => Promise<BrainResult>
 
 export interface ProcessorConfig {
@@ -51,6 +62,17 @@ export interface ProcessorConfig {
   clinicalOverride?: boolean
   /** Optional orchestrator injection — defaults to a closure over the real corpusCallosum(). */
   orchestrator?: OrchestratorFn
+  /**
+   * Wave-6 evolving-message UX killswitch. When true AND telegramSurface is
+   * present, the processor replaces the 8-second "Working on it..." ack with
+   * an immediate "Thinking…" message that is edited in place through phases.
+   */
+  evolvingMessageEnabled?: boolean
+  /**
+   * Injected for the evolving-message path. When absent the legacy 8-second
+   * ack + deliver() path is used regardless of evolvingMessageEnabled.
+   */
+  telegramSurface?: TelegramSendSurface
 }
 
 export class MessageProcessor {
@@ -61,6 +83,7 @@ export class MessageProcessor {
   private readonly history: ConversationHistory
   private readonly promptBuilder: PromptBuilder
   private readonly orchestrator?: OrchestratorFn
+  private readonly responder: TelegramResponder | null
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
     this.config = config
@@ -94,9 +117,22 @@ export class MessageProcessor {
             basePrompt: input.basePrompt,
             timeoutMs,
             logger: this.log,
+            onEvent: input.onEvent,
           },
           { userMsg: input.userMsg, history: input.history },
         )
+    }
+
+    // Wave-6 evolving-message responder. Only constructed when both the
+    // killswitch is on AND the surface is wired; otherwise we stay on the
+    // legacy 8-second ack path.
+    if (config.evolvingMessageEnabled === true && config.telegramSurface) {
+      this.responder = new TelegramResponder({
+        surface: config.telegramSurface,
+        logger: this.log,
+      })
+    } else {
+      this.responder = null
     }
 
     this.queue.on('message', (event) => {
@@ -221,10 +257,47 @@ export class MessageProcessor {
       { event: 'route_bypass', kind: classification.kind, messageId: msg.id },
       'routing via single-brain bypass',
     )
-    return this.processSingleBrain(msg, processStart)
+    const singleBrainKind = this.resolveSingleBrainKind(classification.kind)
+    return this.processSingleBrain(msg, processStart, singleBrainKind)
   }
 
-  private async processSingleBrain(msg: QueueMessage, processStart: number): Promise<string> {
+  /**
+   * Map a classification kind + current config state into the OrchestratorKind
+   * used by phase-labels.ts. Dual-brain natural messages use 'natural'; the
+   * single-brain fallback for a natural message (killswitch or orchestrator
+   * absent) resolves to 'killswitch'.
+   */
+  private resolveSingleBrainKind(classificationKind: MessageKind): OrchestratorKind {
+    if (classificationKind === 'slash') return 'slash'
+    if (classificationKind === 'clinical') return 'clinical'
+    // classificationKind === 'natural' on the single-brain path → dual-brain disabled
+    return 'killswitch'
+  }
+
+  private async processSingleBrain(
+    msg: QueueMessage,
+    processStart: number,
+    kind: OrchestratorKind,
+  ): Promise<string> {
+    // Evolving-message path — attempt ack first; fall back to legacy if it fails.
+    if (this.responder) {
+      const msgId = await this.responder.postAck(msg.chatId, INITIAL_ACK_LABEL)
+      if (msgId != null) {
+        return this.processSingleBrainEvolving(msg, processStart, kind, msgId)
+      }
+      // Telegram send failed — fall through to legacy path.
+      this.log.warn(
+        { event: 'evolving_ack_failed_fallback', messageId: msg.id },
+        'evolving ack returned null — falling back to legacy ack path',
+      )
+    }
+    return this.processSingleBrainLegacy(msg, processStart)
+  }
+
+  private async processSingleBrainLegacy(
+    msg: QueueMessage,
+    processStart: number,
+  ): Promise<string> {
     let ackSent = false
     const ackTimer = setTimeout(async () => {
       ackSent = true
@@ -279,16 +352,7 @@ export class MessageProcessor {
       if (result.timedOut) {
         const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
-        this.log.info(
-          {
-            event: 'process_end',
-            messageId: msg.id,
-            totalPipelineMs: Date.now() - processStart,
-            path: 'single_brain',
-            outcome: 'timeout',
-          },
-          'process end',
-        )
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'legacy')
         return errorMsg
       }
 
@@ -296,16 +360,7 @@ export class MessageProcessor {
         const errorMsg = `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`
         this.log.error({ exitCode: result.exitCode, stderrLength: result.stderr.length }, 'Claude CLI error')
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
-        this.log.info(
-          {
-            event: 'process_end',
-            messageId: msg.id,
-            totalPipelineMs: Date.now() - processStart,
-            path: 'single_brain',
-            outcome: 'error',
-          },
-          'process end',
-        )
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'legacy')
         return errorMsg
       }
 
@@ -328,16 +383,7 @@ export class MessageProcessor {
         ackSent,
       }, 'Message processed')
 
-      this.log.info(
-        {
-          event: 'process_end',
-          messageId: msg.id,
-          totalPipelineMs: Date.now() - processStart,
-          path: 'single_brain',
-          outcome: 'success',
-        },
-        'process end',
-      )
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'legacy')
 
       return output
     } catch (err) {
@@ -345,21 +391,125 @@ export class MessageProcessor {
       const errorMsg = `Internal error: ${err instanceof Error ? err.message : String(err)}`
       this.log.error({ messageId: msg.id, error: errorMsg }, 'Processing failed')
       await this.deliver(msg.chatId, errorMsg).catch(() => {})
-      this.log.info(
-        {
-          event: 'process_end',
-          messageId: msg.id,
-          totalPipelineMs: Date.now() - processStart,
-          path: 'single_brain',
-          outcome: 'error',
-        },
-        'process end',
-      )
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'legacy')
       return errorMsg
     }
   }
 
+  private async processSingleBrainEvolving(
+    msg: QueueMessage,
+    processStart: number,
+    kind: OrchestratorKind,
+    ackMessageId: number,
+  ): Promise<string> {
+    const responder = this.responder!
+    const stopTyping = responder.startTyping(msg.chatId)
+
+    try {
+      const prompt = this.promptBuilder.build(msg.text)
+      this.log.info(
+        {
+          event: 'prompt_built',
+          messageId: msg.id,
+          promptLength: prompt.length,
+          historyEntriesUsed: this.history.getRecent(10).length,
+        },
+        'prompt built',
+      )
+
+      // Phase-label update before the actual call.
+      const preCallLabel = phaseLabelForEvent('single_brain_call_start', kind)
+      if (preCallLabel) {
+        responder.updatePhase(msg.chatId, ackMessageId, preCallLabel)
+      }
+
+      this.log.info(
+        { event: 'single_brain_call_start', messageId: msg.id },
+        'single-brain call start',
+      )
+
+      const result = await spawnClaude(prompt, {
+        claudePath: this.config.claudePath,
+        model: this.config.claudeModel,
+        timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
+      })
+
+      this.log.info(
+        {
+          event: 'single_brain_call_end',
+          messageId: msg.id,
+          durationMs: result.durationMs,
+          timedOut: result.timedOut,
+          exitCode: result.exitCode,
+          outputLength: result.output.length,
+          stderrLength: result.stderr.length,
+        },
+        'single-brain call end',
+      )
+
+      if (result.timedOut) {
+        const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
+        await responder.finalize(msg.chatId, ackMessageId, errorMsg)
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'evolving')
+        return errorMsg
+      }
+
+      if (result.exitCode !== 0 && !result.output.trim()) {
+        const errorMsg = `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`
+        this.log.error({ exitCode: result.exitCode, stderrLength: result.stderr.length }, 'Claude CLI error')
+        await responder.finalize(msg.chatId, ackMessageId, errorMsg)
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'evolving')
+        return errorMsg
+      }
+
+      const output = result.output.trim() || '(No output)'
+      this.history.append('assistant', output)
+      this.log.info(
+        {
+          event: 'history_assistant_appended',
+          messageId: msg.id,
+          assistantContentLength: output.length,
+        },
+        'history assistant appended',
+      )
+      await responder.finalize(msg.chatId, ackMessageId, output)
+
+      this.log.info({
+        messageId: msg.id,
+        durationMs: result.durationMs,
+        outputLen: output.length,
+      }, 'Message processed')
+
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'evolving')
+
+      return output
+    } catch (err) {
+      const errorMsg = `Internal error: ${err instanceof Error ? err.message : String(err)}`
+      this.log.error({ messageId: msg.id, error: errorMsg }, 'Processing failed')
+      await responder.finalize(msg.chatId, ackMessageId, errorMsg).catch(() => {})
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'evolving')
+      return errorMsg
+    } finally {
+      stopTyping()
+    }
+  }
+
   private async processDualBrain(msg: QueueMessage, processStart: number): Promise<string> {
+    // Evolving-message path — attempt ack first; fall back to legacy if it fails.
+    if (this.responder) {
+      const msgId = await this.responder.postAck(msg.chatId, INITIAL_ACK_LABEL)
+      if (msgId != null) {
+        return this.processDualBrainEvolving(msg, processStart, msgId)
+      }
+      this.log.warn(
+        { event: 'evolving_ack_failed_fallback', messageId: msg.id },
+        'evolving ack returned null — falling back to legacy ack path',
+      )
+    }
+    return this.processDualBrainLegacy(msg, processStart)
+  }
+
+  private async processDualBrainLegacy(msg: QueueMessage, processStart: number): Promise<string> {
     let ackSent = false
     const ackTimer = setTimeout(async () => {
       ackSent = true
@@ -430,99 +580,156 @@ export class MessageProcessor {
         'dual-brain processed',
       )
 
-      this.log.info(
-        {
-          event: 'process_end',
-          messageId: msg.id,
-          totalPipelineMs: Date.now() - processStart,
-          path: 'dual_brain',
-          outcome: 'success',
-        },
-        'process end',
-      )
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'success', 'legacy')
 
       return output
     } catch (err) {
       clearTimeout(ackTimer)
-
-      if (err instanceof LeftHemisphereError) {
-        const errorMsg = `Left hemisphere failed: ${err.message}`
-        this.log.error(
-          { event: 'dual_brain_failed', hemisphere: 'left', messageId: msg.id, error: err.message },
-          'dual-brain failed',
-        )
+      const errorMsg = this.formatDualBrainError(err, msg.id)
+      const typed =
+        err instanceof LeftHemisphereError ||
+        err instanceof RightHemisphereError ||
+        err instanceof IntegrationError
+      if (typed) {
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error').catch(() => {})
-        this.log.info(
-          {
-            event: 'process_end',
-            messageId: msg.id,
-            totalPipelineMs: Date.now() - processStart,
-            path: 'dual_brain',
-            outcome: 'error',
-          },
-          'process end',
-        )
-        return errorMsg
+      } else {
+        await this.deliver(msg.chatId, errorMsg).catch(() => {})
       }
-
-      if (err instanceof RightHemisphereError) {
-        const errorMsg = `Right hemisphere failed: ${err.message}`
-        this.log.error(
-          { event: 'dual_brain_failed', hemisphere: 'right', messageId: msg.id, error: err.message },
-          'dual-brain failed',
-        )
-        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error').catch(() => {})
-        this.log.info(
-          {
-            event: 'process_end',
-            messageId: msg.id,
-            totalPipelineMs: Date.now() - processStart,
-            path: 'dual_brain',
-            outcome: 'error',
-          },
-          'process end',
-        )
-        return errorMsg
-      }
-
-      if (err instanceof IntegrationError) {
-        const errorMsg = `Integration failed after retry: ${err.message}`
-        this.log.error(
-          { event: 'dual_brain_failed', hemisphere: 'integration', messageId: msg.id, error: err.message },
-          'dual-brain failed',
-        )
-        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error').catch(() => {})
-        this.log.info(
-          {
-            event: 'process_end',
-            messageId: msg.id,
-            totalPipelineMs: Date.now() - processStart,
-            path: 'dual_brain',
-            outcome: 'error',
-          },
-          'process end',
-        )
-        return errorMsg
-      }
-
-      const errorMsg = `Internal error: ${err instanceof Error ? err.message : String(err)}`
-      this.log.error(
-        { event: 'dual_brain_failed', messageId: msg.id, error: err instanceof Error ? err.message : String(err) },
-        'dual-brain failed',
-      )
-      await this.deliver(msg.chatId, errorMsg).catch(() => {})
-      this.log.info(
-        {
-          event: 'process_end',
-          messageId: msg.id,
-          totalPipelineMs: Date.now() - processStart,
-          path: 'dual_brain',
-          outcome: 'error',
-        },
-        'process end',
-      )
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'error', 'legacy')
       return errorMsg
     }
+  }
+
+  private async processDualBrainEvolving(
+    msg: QueueMessage,
+    processStart: number,
+    ackMessageId: number,
+  ): Promise<string> {
+    const responder = this.responder!
+    const stopTyping = responder.startTyping(msg.chatId)
+
+    try {
+      const basePrompt = this.promptBuilder.build(msg.text)
+      const history = this.history.getRecent(10)
+
+      this.log.info(
+        {
+          event: 'prompt_built',
+          messageId: msg.id,
+          promptLength: basePrompt.length,
+          historyEntriesUsed: history.length,
+        },
+        'prompt built',
+      )
+
+      this.log.info(
+        {
+          event: 'dual_brain_call_start',
+          messageId: msg.id,
+          timeoutMs: this.config.corpusCallosumTimeoutMs,
+        },
+        'dual-brain call start',
+      )
+
+      const onEvent = (eventName: string): void => {
+        const label = phaseLabelForEvent(eventName, 'natural')
+        if (label) {
+          responder.updatePhase(msg.chatId, ackMessageId, label)
+        }
+      }
+
+      const result = await this.orchestrator!({
+        userMsg: msg.text,
+        history,
+        basePrompt,
+        onEvent,
+      })
+
+      const output = result.finalText.trim() || '(No output)'
+      this.history.append('assistant', result.finalText)
+      this.log.info(
+        {
+          event: 'history_assistant_appended',
+          messageId: msg.id,
+          assistantContentLength: result.finalText.length,
+        },
+        'history assistant appended',
+      )
+      await responder.finalize(msg.chatId, ackMessageId, output)
+
+      this.log.info(
+        {
+          event: 'dual_brain_done',
+          messageId: msg.id,
+          totalMs: result.trace.totalMs,
+          integrationMs: result.trace.integrationMs,
+          outputLen: output.length,
+        },
+        'dual-brain processed',
+      )
+
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'success', 'evolving')
+
+      return output
+    } catch (err) {
+      const errorMsg = this.formatDualBrainError(err, msg.id)
+      await responder.finalize(msg.chatId, ackMessageId, errorMsg).catch(() => {})
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'error', 'evolving')
+      return errorMsg
+    } finally {
+      stopTyping()
+    }
+  }
+
+  /** Shared error classification + logging for dual-brain paths. */
+  private formatDualBrainError(err: unknown, messageId: string): string {
+    if (err instanceof LeftHemisphereError) {
+      this.log.error(
+        { event: 'dual_brain_failed', hemisphere: 'left', messageId, error: err.message },
+        'dual-brain failed',
+      )
+      return `Left hemisphere failed: ${err.message}`
+    }
+    if (err instanceof RightHemisphereError) {
+      this.log.error(
+        { event: 'dual_brain_failed', hemisphere: 'right', messageId, error: err.message },
+        'dual-brain failed',
+      )
+      return `Right hemisphere failed: ${err.message}`
+    }
+    if (err instanceof IntegrationError) {
+      this.log.error(
+        { event: 'dual_brain_failed', hemisphere: 'integration', messageId, error: err.message },
+        'dual-brain failed',
+      )
+      return `Integration failed after retry: ${err.message}`
+    }
+    const msgText = err instanceof Error ? err.message : String(err)
+    this.log.error(
+      { event: 'dual_brain_failed', messageId, error: msgText },
+      'dual-brain failed',
+    )
+    return `Internal error: ${msgText}`
+  }
+
+  private emitProcessEnd(
+    messageId: string,
+    processStart: number,
+    path: 'single_brain' | 'dual_brain',
+    outcome: 'success' | 'error' | 'timeout',
+    uxPath: 'evolving' | 'legacy',
+  ): void {
+    this.log.info(
+      {
+        event: 'process_end',
+        messageId,
+        totalPipelineMs: Date.now() - processStart,
+        path,
+        outcome,
+        uxPath,
+      },
+      'process end',
+    )
   }
 
   /**

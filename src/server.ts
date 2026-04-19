@@ -31,6 +31,21 @@ export function buildServer(config: Config): ServerContext {
         server.log.warn({ chatId }, 'No Telegram poller — delivery skipped (HTTP-only mode)')
       }
 
+  // Wave-6 evolving-message surface — a narrow adapter over the poller so the
+  // processor never sees the full TelegramPoller instance. When the poller is
+  // absent (HTTP-only mode), so is the surface, which drops us onto the legacy
+  // ack path naturally.
+  const telegramSurface = poller
+    ? {
+        sendMessageAndGetId: (chatId: string, text: string) =>
+          poller.sendMessageAndGetId(chatId, text, 'Markdown'),
+        editMessageText: (chatId: string, msgId: number, text: string) =>
+          poller.editMessageText(chatId, msgId, text),
+        sendChatAction: (chatId: string, action: string) =>
+          poller.sendChatAction(chatId, action),
+      }
+    : undefined
+
   const processor = new MessageProcessor(
     {
       claudePath: config.CLAUDE_PATH,
@@ -42,6 +57,8 @@ export function buildServer(config: Config): ServerContext {
       rightModel: config.OPENCLAW_CHAT_MODEL_RIGHT,
       corpusCallosumTimeoutMs: config.CORPUS_CALLOSUM_TIMEOUT_MS,
       clinicalOverride: config.CORPUS_CLINICAL_OVERRIDE,
+      evolvingMessageEnabled: config.JARVIS_EVOLVING_MESSAGE_ENABLED,
+      telegramSurface,
     },
     deliver,
     server.log,

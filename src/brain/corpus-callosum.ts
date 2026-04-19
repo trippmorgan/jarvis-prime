@@ -47,6 +47,13 @@ export interface CorpusCallosumDeps {
   timeoutMs: number
   /** Optional structured logger. */
   logger?: CorpusCallosumLogger
+  /**
+   * Called at each phase start for UX labeling. Does NOT expose content.
+   * Fires for: "callosum_pass1_start", "callosum_pass2_start",
+   * "callosum_integration_start". Throws are swallowed — a misbehaving
+   * callback must never break the orchestrator.
+   */
+  onEvent?: (eventName: string) => void
 }
 
 export interface CorpusCallosumInput {
@@ -69,8 +76,17 @@ export async function corpusCallosum(
   deps: CorpusCallosumDeps,
   input: CorpusCallosumInput,
 ): Promise<BrainResult> {
-  const { left, right, basePrompt, timeoutMs, logger } = deps
+  const { left, right, basePrompt, timeoutMs, logger, onEvent } = deps
   const { userMsg, history } = input
+
+  const emit = (eventName: string): void => {
+    if (!onEvent) return
+    try {
+      onEvent(eventName)
+    } catch {
+      // Swallow — UX callbacks must never break orchestrator flow.
+    }
+  }
 
   const start = Date.now()
 
@@ -81,6 +97,7 @@ export async function corpusCallosum(
 
   // --- T09: Pass 1 — parallel independent drafts ---------------------------
   logger?.info({ event: "callosum_pass1_start" }, "pass 1 start")
+  emit("callosum_pass1_start")
 
   const p1LeftPrompt = leftAffordancePrompt(basePrompt, history, userMsg)
   const p1RightPrompt = rightAffordancePrompt(basePrompt, history, userMsg)
@@ -102,6 +119,7 @@ export async function corpusCallosum(
 
   // --- T10: Pass 2 — revision exchange (parallel) --------------------------
   logger?.info({ event: "callosum_pass2_start" }, "pass 2 start")
+  emit("callosum_pass2_start")
 
   const p2LeftPrompt = leftRevisionPrompt(
     basePrompt,
@@ -134,6 +152,7 @@ export async function corpusCallosum(
 
   // --- T11: Integration — Claude only, with one-shot retry -----------------
   logger?.info({ event: "callosum_integration_start" }, "integration start")
+  emit("callosum_integration_start")
 
   const intPrompt = integrationPrompt(
     basePrompt,

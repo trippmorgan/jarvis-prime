@@ -35,9 +35,16 @@ function makeProcessor(opts: {
     userMsg: string
     history: unknown
     basePrompt: string
+    onEvent?: (eventName: string) => void
   }) => Promise<BrainResult>
   deliverMock?: ReturnType<typeof vi.fn>
   logger?: unknown
+  evolvingMessageEnabled?: boolean
+  telegramSurface?: {
+    sendMessageAndGetId: (chatId: string, text: string) => Promise<number | null>
+    editMessageText: (chatId: string, messageId: number, text: string) => Promise<boolean>
+    sendChatAction: (chatId: string, action: string) => Promise<boolean>
+  }
 }) {
   const tmpDir = mkdtempSync(join(tmpdir(), 'jp-test-'))
   const historyPath = opts.historyPath ?? join(tmpDir, 'history.jsonl')
@@ -56,6 +63,8 @@ function makeProcessor(opts: {
       corpusCallosumTimeoutMs: 90_000,
       clinicalOverride: opts.clinicalOverride,
       orchestrator: opts.orchestrator,
+      evolvingMessageEnabled: opts.evolvingMessageEnabled,
+      telegramSurface: opts.telegramSurface,
     },
     deliverMock,
     log,
@@ -865,6 +874,227 @@ describe('MessageProcessor — data-flow logging', () => {
     expect(serialized).not.toContain('P1-RIGHT-SECRET-B')
     expect(serialized).not.toContain('P2-LEFT-SECRET-C')
     expect(serialized).not.toContain('P2-RIGHT-SECRET-D')
+  })
+})
+
+describe('MessageProcessor — evolving-message UX (Wave 6)', () => {
+  function makeFakeSurface() {
+    const sendMessageAndGetId = vi.fn().mockResolvedValue(42)
+    const editMessageText = vi.fn().mockResolvedValue(true)
+    const sendChatAction = vi.fn().mockResolvedValue(true)
+    return {
+      sendMessageAndGetId,
+      editMessageText,
+      sendChatAction,
+      surface: { sendMessageAndGetId, editMessageText, sendChatAction },
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('dual-brain natural path emits 4 edits: Drafting → Revising → Integrating → final', async () => {
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+
+    // Orchestrator that *synchronously* fires the three phase events, then
+    // resolves on the next microtask. Using Promise.resolve().then() keeps the
+    // test deterministic without leaning on fake-timer microtask quirks.
+    const orchestrator = vi.fn(async (input: {
+      onEvent?: (e: string) => void
+    }): Promise<BrainResult> => {
+      input.onEvent?.('callosum_pass1_start')
+      // Small real-delay hops so the responder debounce window has time to
+      // flush between each phase edit.
+      await new Promise((r) => setTimeout(r, 1100))
+      input.onEvent?.('callosum_pass2_start')
+      await new Promise((r) => setTimeout(r, 1100))
+      input.onEvent?.('callosum_integration_start')
+      await new Promise((r) => setTimeout(r, 1100))
+      return { finalText: 'final-answer', trace: MOCK_TRACE }
+    })
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-A', 'tell me something interesting', 'user1')
+
+    // Wait for the finalize to happen — editMessageText is called at least 4
+    // times (Drafting, Revising, Integrating, final).
+    await waitFor(() => editMessageText.mock.calls.length >= 4, 5000)
+
+    expect(sendMessageAndGetId).toHaveBeenCalledTimes(1)
+    expect(sendMessageAndGetId).toHaveBeenCalledWith('chat-A', 'Thinking…')
+
+    const labels = editMessageText.mock.calls.map((c) => c[2] as string)
+    expect(labels).toContain('Drafting…')
+    expect(labels).toContain('Revising…')
+    expect(labels).toContain('Integrating…')
+    expect(labels[labels.length - 1]).toBe('final-answer')
+    expect(editMessageText.mock.calls.length).toBeGreaterThanOrEqual(4)
+  }, 10_000)
+
+  it('slash-command bypass: single edit with final text, no phase labels', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'slash-final', stderr: '', exitCode: 0, durationMs: 10, timedOut: false,
+    })
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-B', '/toggle foo', 'user1')
+
+    await waitFor(() => editMessageText.mock.calls.length >= 1, 3000)
+    // Give any stray edits a moment (there shouldn't be any beyond the final)
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(sendMessageAndGetId).toHaveBeenCalledTimes(1)
+    expect(sendMessageAndGetId).toHaveBeenCalledWith('chat-B', 'Thinking…')
+
+    const labels = editMessageText.mock.calls.map((c) => c[2] as string)
+    // The only "Thinking…" marker is the initial ack (sendMessageAndGetId);
+    // phaseLabelForEvent('single_brain_call_start', 'slash') returns 'Thinking…'
+    // too — but because the initial ack already says 'Thinking…', the responder
+    // may still re-emit one same-text edit. Either way, no dual-brain labels.
+    expect(labels).not.toContain('Drafting…')
+    expect(labels).not.toContain('Revising…')
+    expect(labels).not.toContain('Integrating…')
+    // Final edit lands with the spawnClaude output.
+    expect(labels[labels.length - 1]).toBe('slash-final')
+  })
+
+  it('legacy path: evolvingMessageEnabled=false falls back to 8s ack + deliver', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'legacy-final', stderr: '', exitCode: 0, durationMs: 10, timedOut: false,
+    })
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      evolvingMessageEnabled: false,
+      telegramSurface: surface, // present but flag disabled → ignored
+    })
+
+    processor.submit('chat-C', 'hello', 'user1')
+
+    await waitFor(() => deliverMock.mock.calls.length > 0, 2000)
+
+    // Legacy path routes through deliver callback, not the evolving surface.
+    expect(deliverMock).toHaveBeenCalledWith('chat-C', 'legacy-final')
+    expect(sendMessageAndGetId).not.toHaveBeenCalled()
+    expect(editMessageText).not.toHaveBeenCalled()
+  })
+
+  it('legacy path: telegramSurface absent falls back to deliver', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'no-surface', stderr: '', exitCode: 0, durationMs: 10, timedOut: false,
+    })
+
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      evolvingMessageEnabled: true, // flag on but surface missing → legacy
+      telegramSurface: undefined,
+    })
+
+    processor.submit('chat-D', 'hello', 'user1')
+    await waitFor(() => deliverMock.mock.calls.length > 0, 2000)
+
+    expect(deliverMock).toHaveBeenCalledWith('chat-D', 'no-surface')
+  })
+
+  it('typing heartbeat fires repeatedly during a long-running orchestrator', async () => {
+    const { surface, sendChatAction } = makeFakeSurface()
+
+    // Long-running orchestrator — never fires phase events, just delays.
+    const orchestrator = vi.fn(async (): Promise<BrainResult> => {
+      await new Promise((r) => setTimeout(r, 9000))
+      return { finalText: 'eventually', trace: MOCK_TRACE }
+    })
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-E', 'long task', 'user1')
+
+    // Wait ~8s of real time; the responder fires typing every ~4s.
+    await new Promise((r) => setTimeout(r, 8200))
+
+    // Initial + at least one interval tick = >= 2 calls.
+    expect(sendChatAction.mock.calls.length).toBeGreaterThanOrEqual(2)
+    for (const call of sendChatAction.mock.calls) {
+      expect(call[0]).toBe('chat-E')
+      expect(call[1]).toBe('typing')
+    }
+  }, 15_000)
+
+  it('error path finalizes with error text and stops typing heartbeat', async () => {
+    const { surface, editMessageText, sendChatAction } = makeFakeSurface()
+
+    const orchestrator = vi.fn().mockRejectedValue(new LeftHemisphereError('boom'))
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-F', 'trigger error', 'user1')
+
+    // Wait for finalize edit to appear.
+    await waitFor(() => editMessageText.mock.calls.length >= 1, 3000)
+
+    const lastEditText = editMessageText.mock.calls.at(-1)?.[2] as string
+    expect(lastEditText).toContain('Left hemisphere failed')
+    expect(lastEditText).toContain('boom')
+
+    // Snapshot typing call count right after resolution, then wait 5s real —
+    // the heartbeat should NOT continue ticking once stopTyping fired.
+    const afterErrorCount = sendChatAction.mock.calls.length
+    await new Promise((r) => setTimeout(r, 5000))
+    expect(sendChatAction.mock.calls.length).toBe(afterErrorCount)
+  }, 10_000)
+
+  it('clinical bypass routes to single-brain with only one final edit', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'clinical-final', stderr: '', exitCode: 0, durationMs: 10, timedOut: false,
+    })
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+    const orchestrator = vi.fn() // should never be called
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      clinicalOverride: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-G', 'something clinical', 'user1')
+
+    await waitFor(() => editMessageText.mock.calls.length >= 1, 3000)
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(orchestrator).not.toHaveBeenCalled()
+    expect(sendMessageAndGetId).toHaveBeenCalledWith('chat-G', 'Thinking…')
+
+    const labels = editMessageText.mock.calls.map((c) => c[2] as string)
+    expect(labels).not.toContain('Drafting…')
+    expect(labels).not.toContain('Revising…')
+    expect(labels).not.toContain('Integrating…')
+    expect(labels[labels.length - 1]).toBe('clinical-final')
   })
 })
 
