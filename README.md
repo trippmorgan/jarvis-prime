@@ -5,7 +5,7 @@ Jarvis Prime is the central brain for the Jarvis network. It bridges Telegram wi
 **v1:** single-brain Claude Code bridge (complete 2026-04-16).
 **v1.1 — corpus-callosum:** Gibsonian dual-brain extension (Waves 1–4 complete 2026-04-18). Every natural-language message is now processed by two LLM hemispheres working in parallel through a "corpus callosum" — left (Claude, 51% dominant) = logical/structural, right (gpt-5.4 codex via OpenClaw gateway) = holistic/creative. Claude integrates the final response with dissent silently merged.
 
-**Status:** 212 tests passing across 18 test files. `tsc` + `npm run build` clean.
+**Status:** 216 tests passing across 19 test files (Wave 5 T16 e2e smoke added). `tsc` + `npm run build` clean. AC v1.1 AC1 (visibly differs from Claude-alone) awaits live Telegram smoke test — see `.planning/SMOKE.md`.
 
 ## Architecture
 
@@ -433,12 +433,14 @@ Spec and plan for the corpus-callosum extension live in the sibling project:
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/SPEC.md`
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/PLAN.md`
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/STATE.md`
+- `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/SMOKE.md` — Wave 5 T17 manual checklist
 
 v1 planning artifacts (SPEC/PLAN/STATE/TRACES) were in `.planning/` in this tree pre-v1.1.
 
 ## Git History
 
 ```
+e90c4b7 feat(corpus-callosum): Wave 5 T16 — e2e smoke test (AC1+AC2+AC3+AC4)
 817127a feat(processor): add data-flow logging across full pipeline
 86b1d38 corpus-callosum Wave 4: processor integration (T13-T15)
 9f67998 corpus-callosum Wave 3: orchestrator (T09-T12)
