@@ -458,6 +458,416 @@ describe('MessageProcessor — dual-brain integration (Wave 4)', () => {
   })
 })
 
+describe('MessageProcessor — data-flow logging', () => {
+  type LogEntry = { level: 'info' | 'warn' | 'error', payload: unknown, msg?: string }
+
+  function makeCapturingLogger() {
+    const logged: LogEntry[] = []
+    const spy = {
+      info: (payload: unknown, msg?: string) => { logged.push({ level: 'info', payload, msg }) },
+      warn: (payload: unknown, msg?: string) => { logged.push({ level: 'warn', payload, msg }) },
+      error: (payload: unknown, msg?: string) => { logged.push({ level: 'error', payload, msg }) },
+      fatal: () => {},
+      debug: () => {},
+      trace: () => {},
+      child: () => spy,
+      level: 'info',
+      silent: () => {},
+    }
+    const events = (name: string) =>
+      logged.filter((l) => (l.payload as Record<string, unknown> | null | undefined)?.event === name)
+    return { logged, spy, events }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('emits message_inbound on submit with textLength and chatId (no raw text)', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'x', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', 'hello-world-42', 'userA')
+
+    const inbound = events('message_inbound')
+    expect(inbound.length).toBe(1)
+    const payload = inbound[0].payload as Record<string, unknown>
+    expect(payload.chatId).toBe('chatA')
+    expect(payload.userId).toBe('userA')
+    expect(payload.textLength).toBe('hello-world-42'.length)
+    expect(typeof payload.timestamp).toBe('number')
+    expect(payload).not.toHaveProperty('text')
+  })
+
+  it('phi_scan fires on blocked submit with reasonsCount>=1 and blocked=true', () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+
+    processor.submit('chatA', 'patient John Smith was admitted', 'userA')
+
+    const scans = events('phi_scan')
+    expect(scans.length).toBe(1)
+    const payload = scans[0].payload as Record<string, unknown>
+    expect(payload.blocked).toBe(true)
+    expect(payload.reasonsCount).toBeGreaterThanOrEqual(1)
+    expect(Array.isArray(payload.reasons)).toBe(true)
+  })
+
+  it('phi_scan fires on allowed submit with blocked=false and reasonsCount=0', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', 'hello there', 'userA')
+
+    const scans = events('phi_scan')
+    expect(scans.length).toBe(1)
+    const payload = scans[0].payload as Record<string, unknown>
+    expect(payload.blocked).toBe(false)
+    expect(payload.reasonsCount).toBe(0)
+  })
+
+  it('message_enqueued fires only when not blocked', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', 'patient John Smith was admitted', 'userA')
+    expect(events('message_enqueued').length).toBe(0)
+
+    processor.submit('chatA', 'hello', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const enq = events('message_enqueued')
+    expect(enq.length).toBe(1)
+    const payload = enq[0].payload as Record<string, unknown>
+    expect(typeof payload.messageId).toBe('string')
+    expect(typeof payload.position).toBe('number')
+    expect(payload.chatId).toBe('chatA')
+  })
+
+  it('process_start fires at processing start with messageId and queueLength', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', 'hello', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const starts = events('process_start')
+    expect(starts.length).toBe(1)
+    const payload = starts[0].payload as Record<string, unknown>
+    expect(typeof payload.messageId).toBe('string')
+    expect(typeof payload.queueLength).toBe('number')
+  })
+
+  it('history_user_appended fires with userContentLength === msg.text.length', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    const text = 'hello-queue-probe'
+    processor.submit('chatA', text, 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const appends = events('history_user_appended')
+    expect(appends.length).toBe(1)
+    const payload = appends[0].payload as Record<string, unknown>
+    expect(payload.userContentLength).toBe(text.length)
+    expect(typeof payload.messageId).toBe('string')
+  })
+
+  it('classification event fires with kind matching the router decision', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', '/toggle something', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const cls = events('classification')
+    expect(cls.length).toBe(1)
+    const payload = cls[0].payload as Record<string, unknown>
+    expect(payload.kind).toBe('slash')
+  })
+
+  it('prompt_built fires on single-brain path with promptLength > 0', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', 'hello', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const built = events('prompt_built')
+    expect(built.length).toBe(1)
+    const payload = built[0].payload as Record<string, unknown>
+    expect((payload.promptLength as number)).toBeGreaterThan(0)
+    expect(typeof payload.messageId).toBe('string')
+  })
+
+  it('prompt_built fires on dual-brain path with promptLength > 0', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'integrated',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      logger: spy,
+    })
+
+    processor.submit('chatA', 'tell me about things', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const built = events('prompt_built')
+    expect(built.length).toBe(1)
+    const payload = built[0].payload as Record<string, unknown>
+    expect((payload.promptLength as number)).toBeGreaterThan(0)
+  })
+
+  it('single_brain_call_start and single_brain_call_end fire around spawnClaude', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'xyz', stderr: '', exitCode: 0, durationMs: 42, timedOut: false,
+    })
+
+    processor.submit('chatA', 'hi', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const starts = events('single_brain_call_start')
+    const ends = events('single_brain_call_end')
+    expect(starts.length).toBe(1)
+    expect(ends.length).toBe(1)
+    const endPayload = ends[0].payload as Record<string, unknown>
+    expect(endPayload.durationMs).toBe(42)
+    expect(endPayload.exitCode).toBe(0)
+    expect(endPayload.timedOut).toBe(false)
+    expect(endPayload.outputLength).toBe(3)
+    expect(endPayload.stderrLength).toBe(0)
+  })
+
+  it('dual_brain_call_start fires before orchestrator call; dual_brain_done still fires', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'integrated',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      logger: spy,
+    })
+
+    processor.submit('chatA', 'natural', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const startEvents = events('dual_brain_call_start')
+    expect(startEvents.length).toBe(1)
+    const startPayload = startEvents[0].payload as Record<string, unknown>
+    expect(typeof startPayload.messageId).toBe('string')
+    expect(typeof startPayload.timeoutMs).toBe('number')
+    expect(events('dual_brain_done').length).toBe(1)
+  })
+
+  it('delivery_start and delivery_end fire on happy path with chunks, totalLength, deliveryMs', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'the-response', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', 'hi', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const ds = events('delivery_start')
+    const de = events('delivery_end')
+    expect(ds.length).toBe(1)
+    expect(de.length).toBe(1)
+    const dePayload = de[0].payload as Record<string, unknown>
+    expect((dePayload.chunks as number)).toBeGreaterThanOrEqual(1)
+    expect(dePayload.totalLength).toBe('the-response'.length)
+    expect((dePayload.deliveryMs as number)).toBeGreaterThanOrEqual(0)
+    expect(dePayload.outcome).toBe('success')
+    expect(dePayload.chatId).toBe('chatA')
+  })
+
+  it('history_assistant_appended fires on single-brain path with correct length', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'result-abc', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', 'hi', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const events_ = events('history_assistant_appended')
+    expect(events_.length).toBe(1)
+    const payload = events_[0].payload as Record<string, unknown>
+    expect(payload.assistantContentLength).toBe('result-abc'.length)
+  })
+
+  it('history_assistant_appended fires on dual-brain path with correct length', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'dual-final',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      logger: spy,
+    })
+
+    processor.submit('chatA', 'natural', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const events_ = events('history_assistant_appended')
+    expect(events_.length).toBe(1)
+    const payload = events_[0].payload as Record<string, unknown>
+    expect(payload.assistantContentLength).toBe('dual-final'.length)
+  })
+
+  it('process_end fires with path=single_brain and outcome=success', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      logger: spy,
+    })
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
+    })
+
+    processor.submit('chatA', 'hi', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const ends = events('process_end')
+    expect(ends.length).toBe(1)
+    const payload = ends[0].payload as Record<string, unknown>
+    expect(payload.path).toBe('single_brain')
+    expect(payload.outcome).toBe('success')
+    expect((payload.totalPipelineMs as number)).toBeGreaterThanOrEqual(0)
+  })
+
+  it('process_end fires with path=dual_brain and outcome=success on happy dual-brain path', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'integrated',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      logger: spy,
+    })
+
+    processor.submit('chatA', 'natural', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const ends = events('process_end')
+    expect(ends.length).toBe(1)
+    const payload = ends[0].payload as Record<string, unknown>
+    expect(payload.path).toBe('dual_brain')
+    expect(payload.outcome).toBe('success')
+  })
+
+  it('process_end fires with outcome=error when orchestrator throws LeftHemisphereError', async () => {
+    const { spy, events } = makeCapturingLogger()
+    const orchestrator = vi.fn().mockRejectedValue(new LeftHemisphereError('boom'))
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      logger: spy,
+    })
+
+    processor.submit('chatA', 'natural', 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    const ends = events('process_end')
+    expect(ends.length).toBe(1)
+    const payload = ends[0].payload as Record<string, unknown>
+    expect(payload.path).toBe('dual_brain')
+    expect(payload.outcome).toBe('error')
+  })
+
+  it('PHI-safety: no log payload contains raw user message, finalText, or pass-1/pass-2 draft content', async () => {
+    const { spy, logged } = makeCapturingLogger()
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'FINAL-UNIQUE-OUTPUT-ZZZ-987',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      logger: spy,
+    })
+
+    const USER_PROBE = 'USER-UNIQUE-PROBE-AAA-123'
+    processor.submit('chatA', USER_PROBE, 'userA')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+    await new Promise((r) => setTimeout(r, 20))
+
+    const serialized = JSON.stringify(logged)
+    expect(serialized).not.toContain(USER_PROBE)
+    expect(serialized).not.toContain('FINAL-UNIQUE-OUTPUT-ZZZ-987')
+    expect(serialized).not.toContain('P1-LEFT-SECRET-A')
+    expect(serialized).not.toContain('P1-RIGHT-SECRET-B')
+    expect(serialized).not.toContain('P2-LEFT-SECRET-C')
+    expect(serialized).not.toContain('P2-RIGHT-SECRET-D')
+  })
+})
+
 describe('splitMessage', () => {
   it('returns single chunk for short messages', () => {
     expect(splitMessage('hello', 100)).toEqual(['hello'])

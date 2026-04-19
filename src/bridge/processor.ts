@@ -107,14 +107,54 @@ export class MessageProcessor {
   }
 
   submit(chatId: string, text: string, userId: string): { blocked: boolean; messageId?: string; position?: number; reasons?: string[] } {
+    this.log.info(
+      {
+        event: 'message_inbound',
+        chatId,
+        userId,
+        textLength: text.length,
+        timestamp: Date.now(),
+      },
+      'message inbound',
+    )
+
     const phiResult = scanText(text)
     if (phiResult.blocked) {
-      this.log.warn({ chatId, reasons: phiResult.reasons }, 'PHI detected — message blocked')
+      this.log.warn(
+        {
+          event: 'phi_scan',
+          chatId,
+          blocked: true,
+          reasonsCount: phiResult.reasons.length,
+          reasons: phiResult.reasons,
+        },
+        'PHI detected — message blocked',
+      )
       this.deliver(chatId, 'PHI detected — message blocked for security. Please use the clinical pipeline for patient data.').catch(() => {})
       return { blocked: true, reasons: phiResult.reasons }
     }
 
+    this.log.info(
+      {
+        event: 'phi_scan',
+        chatId,
+        blocked: false,
+        reasonsCount: 0,
+      },
+      'phi scan clear',
+    )
+
     const receipt = this.queue.enqueue({ chatId, text, userId })
+
+    this.log.info(
+      {
+        event: 'message_enqueued',
+        messageId: receipt.id,
+        position: receipt.position,
+        chatId,
+      },
+      'message enqueued',
+    )
 
     if (receipt.position > 1) {
       this.deliver(chatId, `Queued (position ${receipt.position}). I'll get to this shortly.`).catch(() => {})
@@ -132,13 +172,40 @@ export class MessageProcessor {
   }
 
   private async process(msg: QueueMessage): Promise<string> {
+    const processStart = Date.now()
+    this.log.info(
+      {
+        event: 'process_start',
+        messageId: msg.id,
+        queueLength: this.queue.getQueueLength(),
+      },
+      'process start',
+    )
+
     this.history.append('user', msg.text)
+    this.log.info(
+      {
+        event: 'history_user_appended',
+        messageId: msg.id,
+        userContentLength: msg.text.length,
+      },
+      'history user appended',
+    )
 
     const classification = classifyMessage({
       text: msg.text,
       userId: msg.userId,
       clinicalOverride: this.config.clinicalOverride === true,
     })
+
+    this.log.info(
+      {
+        event: 'classification',
+        messageId: msg.id,
+        kind: classification.kind,
+      },
+      'classification',
+    )
 
     const useDualBrain =
       classification.kind === 'natural' &&
@@ -147,25 +214,46 @@ export class MessageProcessor {
 
     if (useDualBrain) {
       this.log.info({ event: 'route_dual_brain', messageId: msg.id }, 'routing via dual-brain')
-      return this.processDualBrain(msg)
+      return this.processDualBrain(msg, processStart)
     }
 
     this.log.info(
       { event: 'route_bypass', kind: classification.kind, messageId: msg.id },
       'routing via single-brain bypass',
     )
-    return this.processSingleBrain(msg)
+    return this.processSingleBrain(msg, processStart)
   }
 
-  private async processSingleBrain(msg: QueueMessage): Promise<string> {
+  private async processSingleBrain(msg: QueueMessage, processStart: number): Promise<string> {
     let ackSent = false
     const ackTimer = setTimeout(async () => {
       ackSent = true
+      this.log.info(
+        { event: 'ack_sent', messageId: msg.id, ackDelayMs: ACK_DELAY_MS },
+        'ack sent',
+      )
       await this.deliver(msg.chatId, 'Working on it...').catch(() => {})
     }, ACK_DELAY_MS)
 
     try {
       const prompt = this.promptBuilder.build(msg.text)
+      this.log.info(
+        {
+          event: 'prompt_built',
+          messageId: msg.id,
+          promptLength: prompt.length,
+          historyEntriesUsed: this.history.getRecent(10).length,
+        },
+        'prompt built',
+      )
+
+      this.log.info(
+        {
+          event: 'single_brain_call_start',
+          messageId: msg.id,
+        },
+        'single-brain call start',
+      )
 
       const result = await spawnClaude(prompt, {
         claudePath: this.config.claudePath,
@@ -173,24 +261,65 @@ export class MessageProcessor {
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
       })
 
+      this.log.info(
+        {
+          event: 'single_brain_call_end',
+          messageId: msg.id,
+          durationMs: result.durationMs,
+          timedOut: result.timedOut,
+          exitCode: result.exitCode,
+          outputLength: result.output.length,
+          stderrLength: result.stderr.length,
+        },
+        'single-brain call end',
+      )
+
       clearTimeout(ackTimer)
 
       if (result.timedOut) {
         const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
-        await this.deliverChunked(msg.chatId, errorMsg)
+        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
+        this.log.info(
+          {
+            event: 'process_end',
+            messageId: msg.id,
+            totalPipelineMs: Date.now() - processStart,
+            path: 'single_brain',
+            outcome: 'timeout',
+          },
+          'process end',
+        )
         return errorMsg
       }
 
       if (result.exitCode !== 0 && !result.output.trim()) {
         const errorMsg = `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`
-        this.log.error({ exitCode: result.exitCode, stderr: result.stderr.slice(0, 500) }, 'Claude CLI error')
-        await this.deliverChunked(msg.chatId, errorMsg)
+        this.log.error({ exitCode: result.exitCode, stderrLength: result.stderr.length }, 'Claude CLI error')
+        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
+        this.log.info(
+          {
+            event: 'process_end',
+            messageId: msg.id,
+            totalPipelineMs: Date.now() - processStart,
+            path: 'single_brain',
+            outcome: 'error',
+          },
+          'process end',
+        )
         return errorMsg
       }
 
       const output = result.output.trim() || '(No output)'
       this.history.append('assistant', output)
-      await this.deliverChunked(msg.chatId, output)
+      this.log.info(
+        {
+          event: 'history_assistant_appended',
+          messageId: msg.id,
+          assistantContentLength: output.length,
+        },
+        'history assistant appended',
+      )
+      await this.deliverWithLogging(msg.id, msg.chatId, output, 'success')
 
       this.log.info({
         messageId: msg.id,
@@ -199,20 +328,45 @@ export class MessageProcessor {
         ackSent,
       }, 'Message processed')
 
+      this.log.info(
+        {
+          event: 'process_end',
+          messageId: msg.id,
+          totalPipelineMs: Date.now() - processStart,
+          path: 'single_brain',
+          outcome: 'success',
+        },
+        'process end',
+      )
+
       return output
     } catch (err) {
       clearTimeout(ackTimer)
       const errorMsg = `Internal error: ${err instanceof Error ? err.message : String(err)}`
       this.log.error({ messageId: msg.id, error: errorMsg }, 'Processing failed')
       await this.deliver(msg.chatId, errorMsg).catch(() => {})
+      this.log.info(
+        {
+          event: 'process_end',
+          messageId: msg.id,
+          totalPipelineMs: Date.now() - processStart,
+          path: 'single_brain',
+          outcome: 'error',
+        },
+        'process end',
+      )
       return errorMsg
     }
   }
 
-  private async processDualBrain(msg: QueueMessage): Promise<string> {
+  private async processDualBrain(msg: QueueMessage, processStart: number): Promise<string> {
     let ackSent = false
     const ackTimer = setTimeout(async () => {
       ackSent = true
+      this.log.info(
+        { event: 'ack_sent', messageId: msg.id, ackDelayMs: ACK_DELAY_MS },
+        'ack sent',
+      )
       await this.deliver(msg.chatId, 'Working on it...').catch(() => {})
     }, ACK_DELAY_MS)
 
@@ -225,6 +379,25 @@ export class MessageProcessor {
       const basePrompt = this.promptBuilder.build(msg.text)
       const history = this.history.getRecent(10)
 
+      this.log.info(
+        {
+          event: 'prompt_built',
+          messageId: msg.id,
+          promptLength: basePrompt.length,
+          historyEntriesUsed: history.length,
+        },
+        'prompt built',
+      )
+
+      this.log.info(
+        {
+          event: 'dual_brain_call_start',
+          messageId: msg.id,
+          timeoutMs: this.config.corpusCallosumTimeoutMs,
+        },
+        'dual-brain call start',
+      )
+
       const result = await this.orchestrator!({
         userMsg: msg.text,
         history,
@@ -235,7 +408,15 @@ export class MessageProcessor {
 
       const output = result.finalText.trim() || '(No output)'
       this.history.append('assistant', result.finalText)
-      await this.deliverChunked(msg.chatId, output)
+      this.log.info(
+        {
+          event: 'history_assistant_appended',
+          messageId: msg.id,
+          assistantContentLength: result.finalText.length,
+        },
+        'history assistant appended',
+      )
+      await this.deliverWithLogging(msg.id, msg.chatId, output, 'success')
 
       this.log.info(
         {
@@ -249,6 +430,17 @@ export class MessageProcessor {
         'dual-brain processed',
       )
 
+      this.log.info(
+        {
+          event: 'process_end',
+          messageId: msg.id,
+          totalPipelineMs: Date.now() - processStart,
+          path: 'dual_brain',
+          outcome: 'success',
+        },
+        'process end',
+      )
+
       return output
     } catch (err) {
       clearTimeout(ackTimer)
@@ -259,7 +451,17 @@ export class MessageProcessor {
           { event: 'dual_brain_failed', hemisphere: 'left', messageId: msg.id, error: err.message },
           'dual-brain failed',
         )
-        await this.deliverChunked(msg.chatId, errorMsg).catch(() => {})
+        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error').catch(() => {})
+        this.log.info(
+          {
+            event: 'process_end',
+            messageId: msg.id,
+            totalPipelineMs: Date.now() - processStart,
+            path: 'dual_brain',
+            outcome: 'error',
+          },
+          'process end',
+        )
         return errorMsg
       }
 
@@ -269,7 +471,17 @@ export class MessageProcessor {
           { event: 'dual_brain_failed', hemisphere: 'right', messageId: msg.id, error: err.message },
           'dual-brain failed',
         )
-        await this.deliverChunked(msg.chatId, errorMsg).catch(() => {})
+        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error').catch(() => {})
+        this.log.info(
+          {
+            event: 'process_end',
+            messageId: msg.id,
+            totalPipelineMs: Date.now() - processStart,
+            path: 'dual_brain',
+            outcome: 'error',
+          },
+          'process end',
+        )
         return errorMsg
       }
 
@@ -279,7 +491,17 @@ export class MessageProcessor {
           { event: 'dual_brain_failed', hemisphere: 'integration', messageId: msg.id, error: err.message },
           'dual-brain failed',
         )
-        await this.deliverChunked(msg.chatId, errorMsg).catch(() => {})
+        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error').catch(() => {})
+        this.log.info(
+          {
+            event: 'process_end',
+            messageId: msg.id,
+            totalPipelineMs: Date.now() - processStart,
+            path: 'dual_brain',
+            outcome: 'error',
+          },
+          'process end',
+        )
         return errorMsg
       }
 
@@ -289,15 +511,58 @@ export class MessageProcessor {
         'dual-brain failed',
       )
       await this.deliver(msg.chatId, errorMsg).catch(() => {})
+      this.log.info(
+        {
+          event: 'process_end',
+          messageId: msg.id,
+          totalPipelineMs: Date.now() - processStart,
+          path: 'dual_brain',
+          outcome: 'error',
+        },
+        'process end',
+      )
       return errorMsg
     }
   }
 
-  private async deliverChunked(chatId: string, text: string): Promise<void> {
+  /**
+   * Deliver a message chunked, with structured delivery_start / delivery_end
+   * events wrapping the write. Safe for both happy-path and error-path output;
+   * caller tags `outcome` appropriately. Never logs text content — only counts.
+   */
+  private async deliverWithLogging(
+    messageId: string,
+    chatId: string,
+    text: string,
+    outcome: 'success' | 'error',
+  ): Promise<void> {
     const chunks = splitMessage(text, TELEGRAM_MAX_LENGTH)
+    const start = Date.now()
+    this.log.info(
+      {
+        event: 'delivery_start',
+        messageId,
+        chatId,
+        chunks: chunks.length,
+        totalLength: text.length,
+      },
+      'delivery start',
+    )
     for (const chunk of chunks) {
       await this.deliver(chatId, chunk)
     }
+    this.log.info(
+      {
+        event: 'delivery_end',
+        messageId,
+        chatId,
+        chunks: chunks.length,
+        totalLength: text.length,
+        deliveryMs: Date.now() - start,
+        outcome,
+      },
+      'delivery end',
+    )
   }
 }
 
