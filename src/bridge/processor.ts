@@ -124,6 +124,7 @@ export class MessageProcessor {
       this.orchestrator = async (input) => {
         const rightClient = makeRightClient({
           rightBrainAgentEnabled: config.rightBrainAgentEnabled === true,
+          rightBrainAgentFallback: config.rightBrainAgentFallback !== false,
           chatId: input.chatId,
           gatewayUrl: config.gatewayUrl,
           gatewayToken: config.gatewayToken,

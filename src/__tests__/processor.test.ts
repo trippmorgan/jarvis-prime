@@ -31,6 +31,8 @@ function makeProcessor(opts: {
   historyPath?: string
   corpusCallosumEnabled?: boolean
   clinicalOverride?: boolean
+  rightBrainAgentEnabled?: boolean
+  rightBrainAgentFallback?: boolean
   orchestrator?: (input: {
     userMsg: string
     history: unknown
@@ -62,6 +64,8 @@ function makeProcessor(opts: {
       rightModel: 'gpt-5.4 codex',
       corpusCallosumTimeoutMs: 90_000,
       clinicalOverride: opts.clinicalOverride,
+      rightBrainAgentEnabled: opts.rightBrainAgentEnabled,
+      rightBrainAgentFallback: opts.rightBrainAgentFallback,
       orchestrator: opts.orchestrator,
       evolvingMessageEnabled: opts.evolvingMessageEnabled,
       telegramSurface: opts.telegramSurface,
@@ -224,6 +228,45 @@ describe('MessageProcessor — dual-brain integration (Wave 4)', () => {
 
     const { processor, deliverMock } = makeProcessor({
       corpusCallosumEnabled: false,
+      orchestrator,
+    })
+
+    processor.submit('123', 'Hello there', 'user1')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(orchestrator).not.toHaveBeenCalled()
+    expect(spawnClaude).toHaveBeenCalledTimes(1)
+  })
+
+  it('W7-T9: clinical override bypasses orchestrator even when rightBrainAgentEnabled=true', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'clinical result', stderr: '', exitCode: 0, durationMs: 100, timedOut: false,
+    })
+    const orchestrator = vi.fn()
+
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      clinicalOverride: true,
+      rightBrainAgentEnabled: true,
+      orchestrator,
+    })
+
+    processor.submit('123', 'Natural language message', 'user1')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(orchestrator).not.toHaveBeenCalled()
+    expect(spawnClaude).toHaveBeenCalledTimes(1)
+  })
+
+  it('W7-T9: CORPUS_CALLOSUM_ENABLED=false bypasses orchestrator even when rightBrainAgentEnabled=true', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'single brain', stderr: '', exitCode: 0, durationMs: 100, timedOut: false,
+    })
+    const orchestrator = vi.fn()
+
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: false,
+      rightBrainAgentEnabled: true,
       orchestrator,
     })
 

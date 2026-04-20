@@ -1,6 +1,7 @@
 import type { HemisphereClient } from './types.js'
 import { RightHemisphereClient } from './right-hemisphere.js'
 import { RightBrainAgentClient } from './right-brain-agent.js'
+import { FallbackRightClient } from './fallback-right-client.js'
 import { deriveRightBrainSessionId } from './sessionId.js'
 
 /**
@@ -18,6 +19,12 @@ import { deriveRightBrainSessionId } from './sessionId.js'
  */
 export interface RightClientFactoryInput {
   rightBrainAgentEnabled: boolean
+  /**
+   * W7-T8 — when true, transport failures from the agent client are
+   * retried once via the legacy chat-completions client (wrapped by
+   * FallbackRightClient). Only consulted when the agent path is enabled.
+   */
+  rightBrainAgentFallback?: boolean
   chatId: string
   /** Gateway URL for the legacy chat-completions client. */
   gatewayUrl: string
@@ -32,16 +39,25 @@ export interface RightClientFactoryInput {
 }
 
 export function makeRightClient(input: RightClientFactoryInput): HemisphereClient {
-  if (input.rightBrainAgentEnabled) {
-    return new RightBrainAgentClient({
-      sessionId: deriveRightBrainSessionId(input.chatId),
-      logger: input.logger,
-    })
-  }
-  return new RightHemisphereClient({
+  const legacy = new RightHemisphereClient({
     gatewayUrl: input.gatewayUrl,
     gatewayToken: input.gatewayToken,
     model: input.rightModel,
+    logger: input.logger,
+  })
+  if (!input.rightBrainAgentEnabled) {
+    return legacy
+  }
+  const agent = new RightBrainAgentClient({
+    sessionId: deriveRightBrainSessionId(input.chatId),
+    logger: input.logger,
+  })
+  if (input.rightBrainAgentFallback === false) {
+    return agent
+  }
+  return new FallbackRightClient({
+    primary: agent,
+    backup: legacy,
     logger: input.logger,
   })
 }

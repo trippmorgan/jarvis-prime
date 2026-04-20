@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { makeRightClient } from '../brain/right-client-factory.js'
 import { RightHemisphereClient } from '../brain/right-hemisphere.js'
 import { RightBrainAgentClient } from '../brain/right-brain-agent.js'
+import { FallbackRightClient } from '../brain/fallback-right-client.js'
 import { deriveRightBrainSessionId } from '../brain/sessionId.js'
 
 /**
@@ -27,38 +28,59 @@ describe('makeRightClient (W7-T7)', () => {
     expect(client).not.toBeInstanceOf(RightBrainAgentClient)
   })
 
-  it('returns RightBrainAgentClient when rightBrainAgentEnabled=true', () => {
+  it('returns RightBrainAgentClient directly when fallback=false', () => {
+    const client = makeRightClient({
+      rightBrainAgentEnabled: true,
+      rightBrainAgentFallback: false,
+      chatId: '8048875001',
+      ...DUMMY_GATEWAY,
+    })
+    expect(client).toBeInstanceOf(RightBrainAgentClient)
+    expect(client).not.toBeInstanceOf(FallbackRightClient)
+  })
+
+  it('wraps agent in FallbackRightClient when fallback=true (default)', () => {
+    const client = makeRightClient({
+      rightBrainAgentEnabled: true,
+      rightBrainAgentFallback: true,
+      chatId: '8048875001',
+      ...DUMMY_GATEWAY,
+    })
+    expect(client).toBeInstanceOf(FallbackRightClient)
+  })
+
+  it('wraps agent in FallbackRightClient when fallback unset (default true)', () => {
     const client = makeRightClient({
       rightBrainAgentEnabled: true,
       chatId: '8048875001',
       ...DUMMY_GATEWAY,
     })
-    expect(client).toBeInstanceOf(RightBrainAgentClient)
-    expect(client).not.toBeInstanceOf(RightHemisphereClient)
+    expect(client).toBeInstanceOf(FallbackRightClient)
   })
 
-  it('RightBrainAgentClient gets sessionId derived from chatId', () => {
+  it('agent client gets sessionId derived from chatId', () => {
     const expectedSessionId = deriveRightBrainSessionId('8048875001')
     const client = makeRightClient({
       rightBrainAgentEnabled: true,
+      rightBrainAgentFallback: false,
       chatId: '8048875001',
       ...DUMMY_GATEWAY,
     }) as RightBrainAgentClient
-    // Peek at private via any — test-only. Alternative would be to export
-    // a getter, but the internal field is stable and test readability wins.
     expect((client as unknown as { sessionId: string }).sessionId).toBe(
       expectedSessionId,
     )
   })
 
-  it('two calls with the same chatId produce clients with the same sessionId', () => {
+  it('two calls with the same chatId produce agent clients with the same sessionId', () => {
     const a = makeRightClient({
       rightBrainAgentEnabled: true,
+      rightBrainAgentFallback: false,
       chatId: '8048875001',
       ...DUMMY_GATEWAY,
     }) as RightBrainAgentClient
     const b = makeRightClient({
       rightBrainAgentEnabled: true,
+      rightBrainAgentFallback: false,
       chatId: '8048875001',
       ...DUMMY_GATEWAY,
     }) as RightBrainAgentClient
@@ -67,14 +89,16 @@ describe('makeRightClient (W7-T7)', () => {
     ).toBe((b as unknown as { sessionId: string }).sessionId)
   })
 
-  it('different chatIds produce clients with different sessionIds', () => {
+  it('different chatIds produce agent clients with different sessionIds', () => {
     const a = makeRightClient({
       rightBrainAgentEnabled: true,
+      rightBrainAgentFallback: false,
       chatId: '8048875001',
       ...DUMMY_GATEWAY,
     }) as RightBrainAgentClient
     const b = makeRightClient({
       rightBrainAgentEnabled: true,
+      rightBrainAgentFallback: false,
       chatId: '8048875002',
       ...DUMMY_GATEWAY,
     }) as RightBrainAgentClient
