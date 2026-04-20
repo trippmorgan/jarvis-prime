@@ -4,8 +4,10 @@ Jarvis Prime is the central brain for the Jarvis network. It bridges Telegram wi
 
 **v1:** single-brain Claude Code bridge (complete 2026-04-16).
 **v1.1 — corpus-callosum:** Gibsonian dual-brain extension (Waves 1–4 complete 2026-04-18). Every natural-language message is now processed by two LLM hemispheres working in parallel through a "corpus callosum" — left (Claude, 51% dominant) = logical/structural, right (gpt-5.4 codex via OpenClaw gateway) = holistic/creative. Claude integrates the final response with dissent silently merged.
+**v1.2 — Telegram evolving-message UX** (Wave 6, complete 2026-04-19). One evolving bubble per message with phase labels (Thinking → Drafting → Revising → Integrating → final) and typing heartbeat. Legacy ack path preserved behind `JARVIS_EVOLVING_MESSAGE_ENABLED=false`.
+**v1.3 — OpenClaw-agent right hemisphere** (Wave 7, complete 2026-04-20). Right hemisphere can be served by a persistent `right-brain` OpenClaw agent with per-chat session memory, behind `RIGHT_BRAIN_AGENT_ENABLED`. Transport failures auto-fallback to the chat-completions client when `RIGHT_BRAIN_AGENT_FALLBACK=true`. Workspace allowlist enforces an 8-file view; PHI and credentials never in scope.
 
-**Status:** 216 tests passing across 19 test files. `tsc` + `npm run build` clean. Live dual-brain smoke test S1 passed 2026-04-18 (74.2s, 5 LLM calls, integrated synthesis on Tononi/Gibson).
+**Status:** 312 tests passing across 27 files (+1 live-only skipped by default). `tsc` + `npm run build` clean. Wave 7 live continuity test passes against the real OpenClaw agent.
 
 ## Architecture
 
@@ -32,7 +34,13 @@ MessageProcessor
   └── natural (dual-brain) → Corpus Callosum
         ├── PASS 1 (parallel)
         │     ├── left (Claude)     ── affordance-framed: logical/structural
-        │     └── right (GPT-5.4)   ── affordance-framed: holistic/creative
+        │     └── right             ── affordance-framed: holistic/creative
+        │         ├── RIGHT_BRAIN_AGENT_ENABLED=false → RightHemisphereClient
+        │         │     POST /v1/chat/completions (stateless, gpt-5.4)
+        │         └── RIGHT_BRAIN_AGENT_ENABLED=true  → RightBrainAgentClient
+        │               openclaw agent --agent right-brain --session-id <sha256(chatId)[:16]>
+        │               (persistent per-chat session; 8-file workspace allowlist)
+        │               → FallbackRightClient retries once on TransportError
         ├── PASS 2 (revision exchange)
         │     ├── left sees right-p1, revises
         │     └── right sees left-p1, revises
@@ -90,12 +98,16 @@ src/
 ├── server.ts                   Fastify factory; wires dual-brain config into MessageProcessor
 ├── bridge/
 │   └── processor.ts            PHI scan → queue → classify → single-brain OR dual-brain → deliver
-├── brain/                      Corpus callosum (Waves 1-3)
+├── brain/                      Corpus callosum (Waves 1-3 + W7)
 │   ├── router.ts               classifyMessage() — slash/clinical/natural classifier
 │   ├── affordance.ts           left/right pass-1 + pass-2 prompt builders
 │   ├── integration.ts          integrationPrompt() — Claude silent-merge final call
 │   ├── left-hemisphere.ts      LeftHemisphereClient — wraps spawnClaude behind HemisphereClient
 │   ├── right-hemisphere.ts     RightHemisphereClient — POSTs OpenClaw /v1/chat/completions
+│   ├── right-brain-agent.ts    RightBrainAgentClient (W7) — shells `openclaw agent --session-id <deterministic>`
+│   ├── fallback-right-client.ts FallbackRightClient (W7) — retries once on transport error
+│   ├── right-client-factory.ts makeRightClient() (W7) — picks client based on flags + chatId
+│   ├── sessionId.ts            deriveRightBrainSessionId() (W7) — sha256(chatId)[:16]
 │   ├── corpus-callosum.ts      Orchestrator — p1 parallel, p2 exchange, integration w/ one retry
 │   └── types.ts                HemisphereClient, CallosumTrace, BrainResult, error classes
 ├── claude/
@@ -122,7 +134,7 @@ src/
 │   └── types.ts                SshResult, NodeConfig, NODES registry
 ├── telegram/
 │   └── poller.ts               Bot API getUpdates long-poll, 409 backoff, sendMessage
-└── __tests__/                  18 test files, 212 tests
+└── __tests__/                  27 test files, 312 tests (+1 live-only, skipped by default)
 ```
 
 ## Environment Variables
@@ -141,6 +153,9 @@ src/
 | `OPENCLAW_CHAT_MODEL_RIGHT` | `openai-codex/gpt-5.4` | OpenClaw path-style model ID for the right hemisphere |
 | `CORPUS_CALLOSUM_TIMEOUT_MS` | 90000 | Per-hemisphere-call timeout |
 | `CORPUS_CLINICAL_OVERRIDE` | false | Force every natural message to single-brain Claude (PHI belt-and-suspenders) |
+| `JARVIS_EVOLVING_MESSAGE_ENABLED` | true | Wave 6 evolving-bubble UX with phase labels + typing heartbeat. `false` → legacy ack-then-final |
+| `RIGHT_BRAIN_AGENT_ENABLED` | false | Wave 7 — serve the right hemisphere via the persistent `right-brain` OpenClaw agent (per-chat session memory). `false` → stateless `/v1/chat/completions` (Wave 5/6 path) |
+| `RIGHT_BRAIN_AGENT_FALLBACK` | true | When the agent throws a transport error, retry once on the chat-completions client. Model errors never fall back |
 | `WORKSPACE_DIR` | `~/.openclaw/workspace` | OpenClaw workspace root |
 | `DELIVERY_QUEUE_DIR` | `~/.openclaw/delivery-queue` | Spool dir for failed deliveries |
 
@@ -192,7 +207,7 @@ POST http://localhost:3100/message
 ### Tests
 
 ```bash
-npx vitest run       # 212 tests across 18 files
+npx vitest run       # 312 tests across 27 files
 npx vitest           # watch mode
 npm run build        # tsc --noEmit equivalent (emits dist/)
 ```
@@ -439,6 +454,20 @@ jarvis-prime and OpenClaw cannot both poll @trippassistant_bot simultaneously (T
 | AC W6-7: uxPath field on process_end for observability | PASS | processor.test.ts — `process_end uxPath="evolving"` on responder path, `uxPath="legacy"` on fallback. Live smoke S7 logs confirm `uxPath: "evolving"` on all three dual-brain runs. |
 | AC W6-8: Killswitch `JARVIS_EVOLVING_MESSAGE_ENABLED=false` → legacy path | PASS | `config.test.ts` boolFromEnv + processor.test.ts (flag-off case) — evolving responder not constructed; processor stays on 8s ack path. |
 | AC W6-9: Live smoke on Telegram | PASS | Wave 6 S7 — three natural messages on 2026-04-19 via @trippassistant_bot (PID 4014849): `uxPath="evolving" path="dual_brain" outcome="success"` all three; totals 19s / 22s / 53s; single bubble per message; phase labels + typing indicator visible. |
+
+### v1.3 (Wave 7 — OpenClaw-agent right hemisphere)
+| AC | Status | Evidence |
+|----|--------|----------|
+| AC W7-1: `RIGHT_BRAIN_AGENT_ENABLED=true` → agent invocation, zero `/v1/chat/completions` for right hemisphere | PASS | `right-client-factory.test.ts` — when enabled, factory returns `RightBrainAgentClient` (wrapped by `FallbackRightClient`) and never the legacy `RightHemisphereClient` on the primary path. `right-brain-agent.test.ts` asserts exact CLI flags (`agent --agent right-brain --session-id <id> --message <...> --json --thinking medium`). |
+| AC W7-2: Session id derived deterministically from chatId | PASS | `sessionId.test.ts` — `deriveRightBrainSessionId('8048875001')` is deterministic; two calls produce the same `[a-z0-9]{16}` output; 1000-id collision-resistance check green. `right-client-factory.test.ts` — two factory calls with the same chatId produce agent clients with identical `sessionId`; different chatIds produce different ones. |
+| AC W7-3: Two-message continuity ("purple elephant") across same chat | PASS | `right-brain-continuity.test.ts` (live, `RIGHT_BRAIN_LIVE=1`) — turn 1 plants the fact, turn 2 asks for recall, agent's turn-2 response contains `purple elephant`. Deterministic session id ensures the OpenClaw agent's on-disk session persists turn-1's context. |
+| AC W7-4: Workspace contains exactly 8 allowlisted symlinks | PASS | `right-brain-workspace-allowlist.test.ts` — enumerates `right-brain-workspace/` via `fs.readdir` recursive; asserts exactly the 8 allowlisted entries (MEMORY, SOUL, IDENTITY, USER, HEARTBEAT, AGENTS, TOOLS, conversation-history.jsonl); regular files and additional dirs rejected (OpenClaw's `.openclaw/workspace-state.json` carved out explicitly). |
+| AC W7-5: Allowlist test fails on disallowed content | PASS | Same test — blocklist regex rejects `openclaw.json`, `*.env`, `*.key`, `*.pem`, any path under `clinical-archive/`; test is the enforcement mechanism. |
+| AC W7-6: `RIGHT_BRAIN_AGENT_ENABLED=false` routes back through chat-completions | PASS | `right-client-factory.test.ts` — when disabled, factory returns `RightHemisphereClient` (chat-completions); no regression in Wave 5/6 path. |
+| AC W7-7: Clinical override never invokes agent client | PASS | `processor.test.ts` W7-T9 regression — `clinicalOverride=true` with `rightBrainAgentEnabled=true` bypasses the orchestrator entirely; `spawnClaude` called once, orchestrator never called. |
+| AC W7-8: Agent failure surfaces `dual_brain_failed hemisphere=right` + Telegram error | PASS | `fallback-right-client.test.ts` — `RightBrainModelError` propagates without fallback (model bug stays visible). `processor.test.ts` existing `right hemisphere failed` path unchanged. Transport failures with fallback enabled log `right_brain_agent_fallback` and surface the backup answer instead. |
+| AC W7-9: Right-brain round-trip ≤ 2× baseline | PASS | `.planning/RESEARCH-W7.md` — CLI 3 runs avg 8.37s (8.60 / 8.15 / 8.36). Baseline chat-completions in Wave 5 S1 was 10.6s (R-p1) and 11.1s (R-p2). Agent path is comparable, not 2× slower. Live continuity test plant+recall completed in ~19s total (two turns) — within the 2× envelope. |
+| AC W7-10: All Wave 5 + Wave 6 ACs regression-green | PASS | 312/312 vitest green; Wave 6 E2E suite unchanged; Wave 5 processor-integration tests unchanged. Killswitch (`CORPUS_CALLOSUM_ENABLED=false`) still single-brain even with `rightBrainAgentEnabled=true` — `processor.test.ts` W7-T9 regression. |
 
 ## Planning Artifacts
 
