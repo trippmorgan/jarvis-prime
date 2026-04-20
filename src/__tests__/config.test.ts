@@ -22,6 +22,8 @@ const KEYS = [
   'CORPUS_CALLOSUM_TIMEOUT_MS',
   'CORPUS_CLINICAL_OVERRIDE',
   'JARVIS_EVOLVING_MESSAGE_ENABLED',
+  'RIGHT_BRAIN_AGENT_ENABLED',
+  'RIGHT_BRAIN_AGENT_FALLBACK',
 ] as const
 
 let savedEnv: Record<string, string | undefined>
@@ -146,6 +148,50 @@ describe('loadConfig boolean parsing', () => {
   it('parses "0" as false', () => {
     process.env.CORPUS_CALLOSUM_ENABLED = '0'
     expect(loadConfig().CORPUS_CALLOSUM_ENABLED).toBe(false)
+  })
+})
+
+describe('loadConfig RIGHT_BRAIN_AGENT_ENABLED (W7-T2)', () => {
+  it('defaults RIGHT_BRAIN_AGENT_ENABLED to false (ships dark)', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    const cfg = loadConfig()
+    expect(cfg.RIGHT_BRAIN_AGENT_ENABLED).toBe(false)
+  })
+
+  it('parses "true" as true', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.RIGHT_BRAIN_AGENT_ENABLED = 'true'
+    const cfg = loadConfig()
+    expect(cfg.RIGHT_BRAIN_AGENT_ENABLED).toBe(true)
+  })
+
+  it('parses "false" as false when explicitly set', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.RIGHT_BRAIN_AGENT_ENABLED = 'false'
+    const cfg = loadConfig()
+    expect(cfg.RIGHT_BRAIN_AGENT_ENABLED).toBe(false)
+  })
+})
+
+describe('loadConfig RIGHT_BRAIN_AGENT_FALLBACK (W7-T2)', () => {
+  it('defaults RIGHT_BRAIN_AGENT_FALLBACK to true (fallback active)', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    const cfg = loadConfig()
+    expect(cfg.RIGHT_BRAIN_AGENT_FALLBACK).toBe(true)
+  })
+
+  it('parses "false" to disable fallback', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.RIGHT_BRAIN_AGENT_FALLBACK = 'false'
+    const cfg = loadConfig()
+    expect(cfg.RIGHT_BRAIN_AGENT_FALLBACK).toBe(false)
+  })
+
+  it('parses "true" as true when explicitly set', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.RIGHT_BRAIN_AGENT_FALLBACK = 'true'
+    const cfg = loadConfig()
+    expect(cfg.RIGHT_BRAIN_AGENT_FALLBACK).toBe(true)
   })
 })
 

@@ -37,6 +37,8 @@ const baseSchema = z.object({
   CORPUS_CALLOSUM_TIMEOUT_MS: z.coerce.number().default(90_000),
   CORPUS_CLINICAL_OVERRIDE: boolFromEnv(false),
   JARVIS_EVOLVING_MESSAGE_ENABLED: boolFromEnv(true),
+  RIGHT_BRAIN_AGENT_ENABLED: boolFromEnv(false),
+  RIGHT_BRAIN_AGENT_FALLBACK: boolFromEnv(true),
 });
 
 /**
