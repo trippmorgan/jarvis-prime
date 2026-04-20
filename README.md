@@ -427,6 +427,19 @@ jarvis-prime and OpenClaw cannot both poll @trippassistant_bot simultaneously (T
 | AC12: New test suite covers dual-brain | PASS | 14 orchestrator + 12 processor-integration tests |
 | AC1: Visibly differs from Claude-alone | PASS | Wave 5 S1 smoke — 74.2s, 5 calls (L-p1 34.9s / R-p1 10.6s / L-p2 24.7s / R-p2 11.1s / integration 14.7s), 1624-char integrated response on "Tononi IIT vs Gibson" — synthesis + Tripp-specific callback visible in output |
 
+### v1.2 (Wave 6 — Telegram evolving-message UX)
+| AC | Status | Evidence |
+|----|--------|----------|
+| AC W6-1: Single evolving bubble per message (no second ack) | PASS | `telegram-evolving.e2e.test.ts` T7/T8 — `sendMessageAndGetId` invoked exactly once; all subsequent updates are `editMessageText` on the same `messageId`. Live smoke S7 — one bubble per user message across three runs. |
+| AC W6-2: Transparent phase labels for natural dual-brain | PASS | "Thinking…" → "Drafting…" → "Revising…" → "Integrating…" → final integrated text. Unit-covered by `phase-labels.test.ts`; E2E-covered by T7 (at least one of Drafting/Revising/Integrating observed in edit sequence, final edit = integrated text). |
+| AC W6-3: Opaque "Thinking…" for slash/clinical/killswitch | PASS | `phase-labels.test.ts` + T8 (slash) — no Drafting/Revising/Integrating edits emitted on single-brain path; final edit is the Claude output. |
+| AC W6-4: Edit debounce ≤ 1/sec per chat | PASS | `responder.test.ts` — `editDebounceMs=1000`, rapid phase updates coalesce into a single trailing edit on window close. |
+| AC W6-5: Typing-indicator heartbeat during processing | PASS | `processor.test.ts` ("typing heartbeat fires repeatedly during a long-running orchestrator") + T7 — `sendChatAction('chat-A', 'typing')` fired immediately and on 4s interval. |
+| AC W6-6: Legacy fallback when surface absent OR ack returns null | PASS | T9a/T9b — surface never touched (T9a) or only `sendMessageAndGetId` called (T9b); output delivered via legacy `deliver()`. `process_end uxPath="legacy"` emitted. |
+| AC W6-7: uxPath field on process_end for observability | PASS | processor.test.ts — `process_end uxPath="evolving"` on responder path, `uxPath="legacy"` on fallback. Live smoke S7 logs confirm `uxPath: "evolving"` on all three dual-brain runs. |
+| AC W6-8: Killswitch `JARVIS_EVOLVING_MESSAGE_ENABLED=false` → legacy path | PASS | `config.test.ts` boolFromEnv + processor.test.ts (flag-off case) — evolving responder not constructed; processor stays on 8s ack path. |
+| AC W6-9: Live smoke on Telegram | PASS | Wave 6 S7 — three natural messages on 2026-04-19 via @trippassistant_bot (PID 4014849): `uxPath="evolving" path="dual_brain" outcome="success"` all three; totals 19s / 22s / 53s; single bubble per message; phase labels + typing indicator visible. |
+
 ## Planning Artifacts
 
 Spec and plan for the corpus-callosum extension live in the sibling project:
@@ -434,13 +447,19 @@ Spec and plan for the corpus-callosum extension live in the sibling project:
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/SPEC.md`
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/PLAN.md`
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/STATE.md`
-- `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/SMOKE.md` — Wave 5 T17 manual checklist
+- `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/SMOKE.md` — Wave 5 T17 + Wave 6 S7 manual smoke evidence
 
 v1 planning artifacts (SPEC/PLAN/STATE/TRACES) were in `.planning/` in this tree pre-v1.1.
 
 ## Git History
 
 ```
+98641df feat(bridge): W6-T5+T6 — processor evolving-message integration + typing heartbeat
+37f2821 feat(telegram): W6-T2 — TelegramResponder with debounce + typing heartbeat
+737afbc feat(brain): W6-T4 — phase label map
+3977a00 feat(telegram): W6-T3 — add sendMessageAndGetId, editMessageText, sendChatAction
+d4ab1ce feat(config): add JARVIS_EVOLVING_MESSAGE_ENABLED (W6-T1)
+1e2c3a1 docs(corpus-callosum): Wave 5 close — AC3 + AC6 live smoke evidence
 e90c4b7 feat(corpus-callosum): Wave 5 T16 — e2e smoke test (AC1+AC2+AC3+AC4)
 817127a feat(processor): add data-flow logging across full pipeline
 86b1d38 corpus-callosum Wave 4: processor integration (T13-T15)
