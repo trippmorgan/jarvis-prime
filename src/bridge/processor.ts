@@ -9,6 +9,7 @@ import { classifyMessage, type MessageKind } from '../brain/router.js'
 import { corpusCallosum } from '../brain/corpus-callosum.js'
 import { LeftHemisphereClient } from '../brain/left-hemisphere.js'
 import { RightHemisphereClient } from '../brain/right-hemisphere.js'
+import { makeRightClient } from '../brain/right-client-factory.js'
 import {
   LeftHemisphereError,
   RightHemisphereError,
@@ -43,6 +44,11 @@ export type OrchestratorFn = (input: {
   userMsg: string
   history: HistoryEntry[]
   basePrompt: string
+  /**
+   * Telegram chat id for this turn. Used by W7 to derive a deterministic
+   * right-brain session id; ignored when the agent path is disabled.
+   */
+  chatId: string
   /** Optional phase-event callback used by the evolving-message UX. */
   onEvent?: (eventName: string) => void
 }) => Promise<BrainResult>
@@ -60,6 +66,18 @@ export interface ProcessorConfig {
   corpusCallosumTimeoutMs: number
   /** When true, force clinical bypass for all messages (explicit caller override). */
   clinicalOverride?: boolean
+  /**
+   * W7 — when true, the right hemisphere uses the persistent OpenClaw agent
+   * (right-brain) instead of the stateless /v1/chat/completions client.
+   * Defaults to false; flip to true after live smoke.
+   */
+  rightBrainAgentEnabled?: boolean
+  /**
+   * W7 — when true and the agent path throws a transport error, retry once
+   * via the legacy chat-completions client. Defaults to true (prevents hard
+   * regression while Wave 7 is being stabilized). Hook consumed by W7-T8.
+   */
+  rightBrainAgentFallback?: boolean
   /** Optional orchestrator injection — defaults to a closure over the real corpusCallosum(). */
   orchestrator?: OrchestratorFn
   /**
@@ -102,15 +120,17 @@ export class MessageProcessor {
         model: config.claudeModel,
         logger: this.log,
       })
-      const rightClient = new RightHemisphereClient({
-        gatewayUrl: config.gatewayUrl,
-        gatewayToken: config.gatewayToken,
-        model: config.rightModel,
-        logger: this.log,
-      })
       const timeoutMs = config.corpusCallosumTimeoutMs
-      this.orchestrator = async (input) =>
-        corpusCallosum(
+      this.orchestrator = async (input) => {
+        const rightClient = makeRightClient({
+          rightBrainAgentEnabled: config.rightBrainAgentEnabled === true,
+          chatId: input.chatId,
+          gatewayUrl: config.gatewayUrl,
+          gatewayToken: config.gatewayToken,
+          rightModel: config.rightModel,
+          logger: this.log,
+        })
+        return corpusCallosum(
           {
             left: leftClient,
             right: rightClient,
@@ -121,6 +141,7 @@ export class MessageProcessor {
           },
           { userMsg: input.userMsg, history: input.history },
         )
+      }
     }
 
     // Wave-6 evolving-message responder. Only constructed when both the
@@ -552,6 +573,7 @@ export class MessageProcessor {
         userMsg: msg.text,
         history,
         basePrompt,
+        chatId: msg.chatId,
       })
 
       clearTimeout(ackTimer)
@@ -642,6 +664,7 @@ export class MessageProcessor {
         userMsg: msg.text,
         history,
         basePrompt,
+        chatId: msg.chatId,
         onEvent,
       })
 

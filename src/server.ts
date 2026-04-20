@@ -58,6 +58,8 @@ export function buildServer(config: Config): ServerContext {
       corpusCallosumTimeoutMs: config.CORPUS_CALLOSUM_TIMEOUT_MS,
       clinicalOverride: config.CORPUS_CLINICAL_OVERRIDE,
       evolvingMessageEnabled: config.JARVIS_EVOLVING_MESSAGE_ENABLED,
+      rightBrainAgentEnabled: config.RIGHT_BRAIN_AGENT_ENABLED,
+      rightBrainAgentFallback: config.RIGHT_BRAIN_AGENT_FALLBACK,
       telegramSurface,
     },
     deliver,
