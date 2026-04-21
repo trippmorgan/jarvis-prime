@@ -195,6 +195,8 @@ export class RightBrainSkillShim {
         claudePath: this.claudePath,
         model: this.model,
         timeoutMs,
+        enableTools: true,
+        enableSlashCommands: true,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

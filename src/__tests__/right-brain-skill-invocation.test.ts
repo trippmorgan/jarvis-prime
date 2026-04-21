@@ -108,6 +108,21 @@ describe("RightBrainSkillShim — happy path (W8-T8)", () => {
     await shim.invoke(dispatch(), { userMessage: "m", timeoutMs: 42 })
     expect(spawner.mock.calls[0][1].timeoutMs).toBe(42)
   })
+
+  it("enables full tool surface on the spawned Claude (not a bare-reasoning call)", async () => {
+    const spawner = vi.fn(async () => ({
+      output: "ok",
+      stderr: "",
+      exitCode: 0,
+      durationMs: 10,
+      timedOut: false,
+    }))
+    const shim = buildShim({ spawner })
+    await shim.invoke(dispatch(), { userMessage: "m" })
+    const spawnOpts = spawner.mock.calls[0][1]
+    expect(spawnOpts.enableTools).toBe(true)
+    expect(spawnOpts.enableSlashCommands).toBe(true)
+  })
 })
 
 describe("RightBrainSkillShim — failure modes (W8-T8)", () => {

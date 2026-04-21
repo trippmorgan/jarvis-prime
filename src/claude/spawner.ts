@@ -22,14 +22,20 @@ export async function spawnClaude(
   const model = opts?.model ?? DEFAULTS.model;
   const timeoutMs = opts?.timeoutMs ?? DEFAULTS.timeoutMs;
   const workingDir = opts?.workingDir ?? DEFAULTS.workingDir;
+  const enableTools = opts?.enableTools === true;
+  const enableSlashCommands = opts?.enableSlashCommands === true;
 
   const args = [
     "--print",
     "--model", model,
     "--dangerously-skip-permissions",
-    "--tools", "",
-    "--disable-slash-commands",
   ];
+  if (!enableTools) {
+    args.push("--tools", "");
+  }
+  if (!enableSlashCommands) {
+    args.push("--disable-slash-commands");
+  }
 
   const start = performance.now();
 

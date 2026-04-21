@@ -159,4 +159,50 @@ describe("spawnClaude", () => {
       expect.objectContaining({ cwd: "/tmp/test" }),
     );
   });
+
+  it("omits --tools and --disable-slash-commands when enableTools + enableSlashCommands are true", async () => {
+    const { child } = makeFakeChild();
+    mockSpawn.mockReturnValue(child);
+
+    const resultPromise = spawnClaude("run the skill", {
+      enableTools: true,
+      enableSlashCommands: true,
+    });
+
+    child.emit("close", 0);
+    await resultPromise;
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "/home/tripp/.local/bin/claude",
+      [
+        "--print",
+        "--model", "sonnet",
+        "--dangerously-skip-permissions",
+      ],
+      expect.any(Object),
+    );
+  });
+
+  it("keeps --tools \"\" when only enableSlashCommands is true (opt-in is granular)", async () => {
+    const { child } = makeFakeChild();
+    mockSpawn.mockReturnValue(child);
+
+    const resultPromise = spawnClaude("draft", {
+      enableSlashCommands: true,
+    });
+
+    child.emit("close", 0);
+    await resultPromise;
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "/home/tripp/.local/bin/claude",
+      [
+        "--print",
+        "--model", "sonnet",
+        "--dangerously-skip-permissions",
+        "--tools", "",
+      ],
+      expect.any(Object),
+    );
+  });
 });
