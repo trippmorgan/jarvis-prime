@@ -9,16 +9,14 @@ export interface SpawnOptions {
   workingDir?: string;
   /**
    * Enable the spawned Claude's full tool surface (Bash, Read, Edit, etc.).
-   * Default: false — `--tools ""` is passed, so hemisphere calls used for
-   * pure reasoning don't incur full-agent startup cost (CLAUDE.md auto-load,
-   * MCP discovery) that caused the 240s left-hemisphere timeout.
-   * Skill-shim callers must set this true to actually execute tools.
+   * Default: true — every spawn gets tools. Pass `enableTools: false` only
+   * for a pure-reasoning spawn that must not touch the filesystem or shell.
    */
   enableTools?: boolean;
   /**
    * Allow the spawned Claude to resolve `/skill` references from the prompt.
-   * Default: false — `--disable-slash-commands` is passed.
-   * Skill-shim callers may opt in if their methodology depends on chained skills.
+   * Default: true. Pass `enableSlashCommands: false` only to forbid a spawn
+   * from invoking slash commands.
    */
   enableSlashCommands?: boolean;
 }

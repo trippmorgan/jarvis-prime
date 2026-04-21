@@ -55,15 +55,14 @@ describe("spawnClaude", () => {
     expect(result.timedOut).toBe(false);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
 
-    // Verify spawn was called with correct args
+    // Verify spawn was called with correct args — tools and slash commands
+    // are ON by default; no strip flags appear in argv.
     expect(mockSpawn).toHaveBeenCalledWith(
       "/home/tripp/.local/bin/claude",
       [
         "--print",
         "--model", "sonnet",
         "--dangerously-skip-permissions",
-        "--tools", "",
-        "--disable-slash-commands",
       ],
       expect.objectContaining({
         cwd: "/home/tripp/.openclaw/workspace/jarvis-prime/",
@@ -153,20 +152,18 @@ describe("spawnClaude", () => {
         "--print",
         "--model", "opus",
         "--dangerously-skip-permissions",
-        "--tools", "",
-        "--disable-slash-commands",
       ],
       expect.objectContaining({ cwd: "/tmp/test" }),
     );
   });
 
-  it("omits --tools and --disable-slash-commands when enableTools + enableSlashCommands are true", async () => {
+  it("adds --tools \"\" and --disable-slash-commands only when explicitly disabled", async () => {
     const { child } = makeFakeChild();
     mockSpawn.mockReturnValue(child);
 
-    const resultPromise = spawnClaude("run the skill", {
-      enableTools: true,
-      enableSlashCommands: true,
+    const resultPromise = spawnClaude("pure reasoning only", {
+      enableTools: false,
+      enableSlashCommands: false,
     });
 
     child.emit("close", 0);
@@ -178,17 +175,19 @@ describe("spawnClaude", () => {
         "--print",
         "--model", "sonnet",
         "--dangerously-skip-permissions",
+        "--tools", "",
+        "--disable-slash-commands",
       ],
       expect.any(Object),
     );
   });
 
-  it("keeps --tools \"\" when only enableSlashCommands is true (opt-in is granular)", async () => {
+  it("strips only tools when enableTools=false and enableSlashCommands is left default", async () => {
     const { child } = makeFakeChild();
     mockSpawn.mockReturnValue(child);
 
-    const resultPromise = spawnClaude("draft", {
-      enableSlashCommands: true,
+    const resultPromise = spawnClaude("no shell, slashes ok", {
+      enableTools: false,
     });
 
     child.emit("close", 0);
