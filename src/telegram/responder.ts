@@ -68,6 +68,23 @@ export class TelegramResponder {
     }
   }
 
+  /**
+   * Post a fresh standalone bubble. Used after a deliberation card has been
+   * pinned to the original ack bubble — subsequent content (the integrated
+   * answer, follow-up chunks, error text) lands as new messages below.
+   */
+  async postBubble(chatId: string, text: string): Promise<number | null> {
+    try {
+      return await this.surface.sendMessageAndGetId(chatId, text)
+    } catch (err) {
+      this.log.error(
+        { chatId, error: err instanceof Error ? err.message : String(err) },
+        'TelegramResponder.postBubble error',
+      )
+      return null
+    }
+  }
+
   updatePhase(chatId: string, messageId: number, label: string): void {
     const state = this.debounceByChat.get(chatId)
 

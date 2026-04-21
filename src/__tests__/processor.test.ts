@@ -3,7 +3,11 @@ import { mkdtempSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import Fastify from 'fastify'
-import { MessageProcessor, splitMessage } from '../bridge/processor.js'
+import {
+  MessageProcessor,
+  splitMessage,
+  formatDeliberationCard,
+} from '../bridge/processor.js'
 import {
   LeftHemisphereError,
   RightHemisphereError,
@@ -117,18 +121,10 @@ describe('MessageProcessor', () => {
     })
 
     const result = processor.submit('123', 'Hi', 'user1')
-    expect(result.blocked).toBe(false)
     expect(result.position).toBe(1)
 
     await new Promise((r) => setTimeout(r, 100))
     expect(deliverMock).toHaveBeenCalledWith('123', 'Hello!')
-  })
-
-  it('blocks PHI without calling Claude', async () => {
-    const result = processor.submit('123', 'patient John Smith was admitted', 'user1')
-    expect(result.blocked).toBe(true)
-    expect(result.reasons).toContain('patient_name_detected')
-    expect(spawnClaude).not.toHaveBeenCalled()
   })
 
   it('reports queue position correctly', () => {
@@ -140,7 +136,6 @@ describe('MessageProcessor', () => {
     )
 
     const r1 = processor.submit('123', 'first', 'user1')
-    expect(r1.blocked).toBe(false)
     expect(r1.position).toBe(1)
 
     // Queue length check
@@ -456,25 +451,6 @@ describe('MessageProcessor — dual-brain integration (Wave 4)', () => {
     expect(assistantEntry.content.length).toBeLessThanOrEqual(2000)
   })
 
-  it('PHI block path still works after Wave 4 (never reaches orchestrator)', async () => {
-    const orchestrator = vi.fn()
-    const { processor, deliverMock } = makeProcessor({
-      corpusCallosumEnabled: true,
-      orchestrator,
-    })
-
-    const result = processor.submit('123', 'patient Jane Doe was admitted', 'user1')
-    expect(result.blocked).toBe(true)
-    expect(orchestrator).not.toHaveBeenCalled()
-    expect(spawnClaude).not.toHaveBeenCalled()
-    // Delivery happens async via .catch(() => {}) — give it a tick
-    await new Promise((r) => setTimeout(r, 20))
-    const phiMsg = deliverMock.mock.calls.find((c) =>
-      (c[1] as string).startsWith('PHI detected'),
-    )
-    expect(phiMsg).toBeTruthy()
-  })
-
   it('logger never emits user message text during dual-brain flow', async () => {
     const orchestrator = vi.fn().mockResolvedValue({
       finalText: 'integrated',
@@ -557,43 +533,7 @@ describe('MessageProcessor — data-flow logging', () => {
     expect(payload).not.toHaveProperty('text')
   })
 
-  it('phi_scan fires on blocked submit with reasonsCount>=1 and blocked=true', () => {
-    const { spy, events } = makeCapturingLogger()
-    const { processor } = makeProcessor({
-      corpusCallosumEnabled: false,
-      logger: spy,
-    })
-
-    processor.submit('chatA', 'patient John Smith was admitted', 'userA')
-
-    const scans = events('phi_scan')
-    expect(scans.length).toBe(1)
-    const payload = scans[0].payload as Record<string, unknown>
-    expect(payload.blocked).toBe(true)
-    expect(payload.reasonsCount).toBeGreaterThanOrEqual(1)
-    expect(Array.isArray(payload.reasons)).toBe(true)
-  })
-
-  it('phi_scan fires on allowed submit with blocked=false and reasonsCount=0', async () => {
-    const { spy, events } = makeCapturingLogger()
-    const { processor } = makeProcessor({
-      corpusCallosumEnabled: false,
-      logger: spy,
-    })
-    vi.mocked(spawnClaude).mockResolvedValue({
-      output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
-    })
-
-    processor.submit('chatA', 'hello there', 'userA')
-
-    const scans = events('phi_scan')
-    expect(scans.length).toBe(1)
-    const payload = scans[0].payload as Record<string, unknown>
-    expect(payload.blocked).toBe(false)
-    expect(payload.reasonsCount).toBe(0)
-  })
-
-  it('message_enqueued fires only when not blocked', async () => {
+  it('message_enqueued fires on submit with messageId, position, and chatId', async () => {
     const { spy, events } = makeCapturingLogger()
     const { processor, deliverMock } = makeProcessor({
       corpusCallosumEnabled: false,
@@ -602,9 +542,6 @@ describe('MessageProcessor — data-flow logging', () => {
     vi.mocked(spawnClaude).mockResolvedValue({
       output: 'ok', stderr: '', exitCode: 0, durationMs: 1, timedOut: false,
     })
-
-    processor.submit('chatA', 'patient John Smith was admitted', 'userA')
-    expect(events('message_enqueued').length).toBe(0)
 
     processor.submit('chatA', 'hello', 'userA')
     await waitFor(() => deliverMock.mock.calls.length > 0)
@@ -981,6 +918,54 @@ describe('MessageProcessor — evolving-message UX (Wave 6)', () => {
     expect(editMessageText.mock.calls.length).toBeGreaterThanOrEqual(4)
   }, 10_000)
 
+  it('dual-brain natural path: pass-2 payload pins deliberation card to ack and posts integrated answer in a fresh bubble', async () => {
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+
+    const orchestrator = vi.fn(async (input: {
+      onEvent?: (e: string, payload?: any) => void
+    }): Promise<BrainResult> => {
+      input.onEvent?.('callosum_pass1_start')
+      await new Promise((r) => setTimeout(r, 1100))
+      input.onEvent?.('callosum_pass2_start')
+      await new Promise((r) => setTimeout(r, 1100))
+      input.onEvent?.('callosum_pass2_ok', {
+        p2Left: 'left-revised-draft',
+        p2Right: 'right-revised-draft',
+        leftMs: 1234,
+        rightMs: 5678,
+      })
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_integration_start')
+      await new Promise((r) => setTimeout(r, 50))
+      return { finalText: 'integrated-final', trace: MOCK_TRACE }
+    })
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-CARD', 'show me the conversation', 'user1')
+
+    // Integrated answer arrives as a second sendMessageAndGetId call (postBubble).
+    await waitFor(
+      () => sendMessageAndGetId.mock.calls.some(([, t]) => t === 'integrated-final'),
+      5000,
+    )
+
+    expect(sendMessageAndGetId).toHaveBeenCalledTimes(2)
+    expect(sendMessageAndGetId.mock.calls[0]).toEqual(['chat-CARD', 'Thinking…'])
+    expect(sendMessageAndGetId.mock.calls[1]).toEqual(['chat-CARD', 'integrated-final'])
+
+    const editTexts = editMessageText.mock.calls.map((c) => c[2] as string)
+    const lastEdit = editTexts[editTexts.length - 1]
+    expect(lastEdit).toContain('Two-brain deliberation')
+    expect(lastEdit).toContain('left-revised-draft')
+    expect(lastEdit).toContain('right-revised-draft')
+  }, 10_000)
+
   it('slash-command bypass: single edit with final text, no phase labels', async () => {
     vi.mocked(spawnClaude).mockResolvedValue({
       output: 'slash-final', stderr: '', exitCode: 0, durationMs: 10, timedOut: false,
@@ -1139,6 +1124,278 @@ describe('MessageProcessor — evolving-message UX (Wave 6)', () => {
     expect(labels).not.toContain('Integrating…')
     expect(labels[labels.length - 1]).toBe('clinical-final')
   })
+})
+
+describe('formatDeliberationCard (W8-T13)', () => {
+  it('legacy header (no tools, no rightMode): renders Claude / GPT', () => {
+    const out = formatDeliberationCard('left-draft', 'right-draft', 6600, 2100)
+    expect(out).toContain('Two-brain deliberation')
+    expect(out).toContain('Left (Claude · 6.6s):')
+    expect(out).toContain('Right (GPT · 2.1s):')
+    expect(out).toContain('left-draft')
+    expect(out).toContain('right-draft')
+  })
+
+  it('router left with no tools: renders "drafted"', () => {
+    const out = formatDeliberationCard('L', 'R', 6600, 2100, {
+      leftTools: [],
+      rightMode: 'research',
+    })
+    expect(out).toContain('Left (drafted · 6.6s):')
+  })
+
+  it('router left with tools: renders "ran <names>" joined by comma', () => {
+    const out = formatDeliberationCard('L', 'R', 12300, 4100, {
+      leftTools: [
+        { name: '/network-status', durationMs: 8000 },
+        { name: 'Bash', durationMs: 3000 },
+      ],
+      rightMode: 'skill',
+      rightSkill: 'jarv-dev',
+    })
+    expect(out).toContain('Left (ran /network-status, Bash · 12.3s):')
+  })
+
+  it('router right skill mode: renders skill name', () => {
+    const out = formatDeliberationCard('L', 'R', 6600, 4100, {
+      leftTools: [],
+      rightMode: 'skill',
+      rightSkill: 'jarv-dev',
+    })
+    expect(out).toContain('Right (jarv-dev · 4.1s):')
+  })
+
+  it('router right research mode: renders "researched"', () => {
+    const out = formatDeliberationCard('L', 'R', 6600, 2100, {
+      leftTools: [],
+      rightMode: 'research',
+    })
+    expect(out).toContain('Right (researched · 2.1s):')
+  })
+
+  it('clips each draft to 1500 chars with … [truncated] marker', () => {
+    const longLeft = 'L'.repeat(2000)
+    const longRight = 'R'.repeat(2000)
+    const out = formatDeliberationCard(longLeft, longRight, 1000, 1000)
+    expect(out).toContain('… [truncated]')
+    expect(out.length).toBeLessThan(4096)
+  })
+
+  it('stays under 4096 chars even with tool-evidence headers and long drafts', () => {
+    const longLeft = 'L'.repeat(2000)
+    const longRight = 'R'.repeat(2000)
+    const out = formatDeliberationCard(longLeft, longRight, 12300, 4100, {
+      leftTools: [
+        { name: '/network-status', durationMs: 8000 },
+        { name: '/frank-status', durationMs: 3000 },
+        { name: 'Bash', durationMs: 1000 },
+      ],
+      rightMode: 'skill',
+      rightSkill: 'jarv-dev',
+    })
+    expect(out.length).toBeLessThan(4096)
+  })
+
+  it('router right skill mode without explicit rightSkill falls back to generic label', () => {
+    const out = formatDeliberationCard('L', 'R', 6600, 4100, {
+      leftTools: [],
+      rightMode: 'skill',
+    })
+    // Should not crash; falls back to "drafted" when skill name missing.
+    expect(out).toMatch(/Right \(.+? · 4\.1s\):/)
+  })
+})
+
+describe('MessageProcessor — router-mode deliberation card (W8-T13)', () => {
+  function makeFakeSurface() {
+    const sendMessageAndGetId = vi.fn().mockResolvedValue(42)
+    const editMessageText = vi.fn().mockResolvedValue(true)
+    const sendChatAction = vi.fn().mockResolvedValue(true)
+    return {
+      sendMessageAndGetId,
+      editMessageText,
+      sendChatAction,
+      surface: { sendMessageAndGetId, editMessageText, sendChatAction },
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('passes through leftTools + rightMode + rightSkill from callosum_pass2_ok into the card', async () => {
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+
+    const orchestrator = vi.fn(async (input: {
+      onEvent?: (e: string, payload?: any) => void
+    }): Promise<BrainResult> => {
+      input.onEvent?.('callosum_pass1_start')
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_pass2_start')
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_pass2_ok', {
+        p2Left: 'left-revised',
+        p2Right: 'right-revised',
+        leftMs: 12300,
+        rightMs: 4100,
+        leftTools: [{ name: '/network-status', durationMs: 8000 }],
+        rightMode: 'skill',
+        rightSkill: 'jarv-dev',
+      })
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_integration_start')
+      await new Promise((r) => setTimeout(r, 50))
+      return { finalText: 'integrated-router-final', trace: MOCK_TRACE }
+    })
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-R', 'check Argus', 'user1')
+
+    await waitFor(
+      () => sendMessageAndGetId.mock.calls.some(([, t]) => t === 'integrated-router-final'),
+      5000,
+    )
+
+    const editTexts = editMessageText.mock.calls.map((c) => c[2] as string)
+    const cardEdit = editTexts.find((t) => t.includes('Two-brain deliberation'))
+    expect(cardEdit).toBeDefined()
+    expect(cardEdit!).toContain('/network-status')
+    expect(cardEdit!).toContain('jarv-dev')
+    expect(cardEdit!).toContain('Left (ran /network-status · 12.3s):')
+    expect(cardEdit!).toContain('Right (jarv-dev · 4.1s):')
+  }, 10_000)
+
+  it('W8-T14: router_plan_start pre-card edits ack to Planning…', async () => {
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+
+    const orchestrator = vi.fn(async (input: {
+      onEvent?: (e: string, payload?: any) => void
+    }): Promise<BrainResult> => {
+      input.onEvent?.('router_plan_start')
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_pass1_start')
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_pass2_start')
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_pass2_ok', {
+        p2Left: 'L2', p2Right: 'R2',
+        leftMs: 1000, rightMs: 1000,
+        leftTools: [], rightMode: 'research',
+      })
+      await new Promise((r) => setTimeout(r, 50))
+      return { finalText: 'done', trace: MOCK_TRACE }
+    })
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-P', 'plan this', 'user1')
+
+    await waitFor(
+      () => sendMessageAndGetId.mock.calls.some(([, t]) => t === 'done'),
+      5000,
+    )
+
+    const labels = editMessageText.mock.calls.map((c) => c[2] as string)
+    expect(labels).toContain('Planning…')
+  }, 10_000)
+
+  it('W8-T14: self_correction_retry_start AFTER card is posted edits ack to Re-planning… (one-time exception)', async () => {
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+
+    const orchestrator = vi.fn(async (input: {
+      onEvent?: (e: string, payload?: any) => void
+    }): Promise<BrainResult> => {
+      input.onEvent?.('callosum_pass1_start')
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_pass2_start')
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_pass2_ok', {
+        p2Left: 'L2-DRAFT', p2Right: 'R2-DRAFT',
+        leftMs: 1000, rightMs: 1000,
+        leftTools: [{ name: '/network-status', durationMs: 500 }],
+        rightMode: 'skill',
+        rightSkill: 'jarv-dev',
+      })
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('callosum_integration_start')
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('self_correction_retry_start')
+      await new Promise((r) => setTimeout(r, 50))
+      return { finalText: 'retry-final', trace: MOCK_TRACE }
+    })
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-RX', 'stump me', 'user1')
+
+    await waitFor(
+      () => sendMessageAndGetId.mock.calls.some(([, t]) => t === 'retry-final'),
+      5000,
+    )
+
+    const editTexts = editMessageText.mock.calls.map((c) => c[2] as string)
+    // Card must have been posted.
+    expect(editTexts.some((t) => t.includes('Two-brain deliberation'))).toBe(true)
+    // Re-planning… must appear in the edit sequence (post-card exception).
+    expect(editTexts).toContain('Re-planning…')
+    // Re-planning… must come AFTER the card (it's the one-time exception).
+    const cardIdx = editTexts.findIndex((t) => t.includes('Two-brain deliberation'))
+    const replanIdx = editTexts.findIndex((t) => t === 'Re-planning…')
+    expect(replanIdx).toBeGreaterThan(cardIdx)
+  }, 10_000)
+
+  it('W8-T14: after retry, final answer still posts as a fresh bubble (not an ack edit)', async () => {
+    const { surface, sendMessageAndGetId } = makeFakeSurface()
+
+    const orchestrator = vi.fn(async (input: {
+      onEvent?: (e: string, payload?: any) => void
+    }): Promise<BrainResult> => {
+      input.onEvent?.('callosum_pass2_ok', {
+        p2Left: 'L2', p2Right: 'R2',
+        leftMs: 1000, rightMs: 1000,
+        leftTools: [], rightMode: 'research',
+      })
+      await new Promise((r) => setTimeout(r, 50))
+      input.onEvent?.('self_correction_retry_start')
+      await new Promise((r) => setTimeout(r, 50))
+      return { finalText: 'fresh-bubble-final', trace: MOCK_TRACE }
+    })
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-RZ', 'q', 'user1')
+
+    await waitFor(
+      () => sendMessageAndGetId.mock.calls.some(([, t]) => t === 'fresh-bubble-final'),
+      5000,
+    )
+
+    // First send = "Thinking…" ack. Second send = final answer as fresh bubble.
+    expect(sendMessageAndGetId).toHaveBeenCalledTimes(2)
+    expect(sendMessageAndGetId.mock.calls[0]).toEqual(['chat-RZ', 'Thinking…'])
+    expect(sendMessageAndGetId.mock.calls[1]).toEqual(['chat-RZ', 'fresh-bubble-final'])
+  }, 10_000)
 })
 
 describe('splitMessage', () => {

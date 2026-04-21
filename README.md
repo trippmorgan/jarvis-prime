@@ -5,9 +5,30 @@ Jarvis Prime is the central brain for the Jarvis network. It bridges Telegram wi
 **v1:** single-brain Claude Code bridge (complete 2026-04-16).
 **v1.1 — corpus-callosum:** Gibsonian dual-brain extension (Waves 1–4 complete 2026-04-18). Every natural-language message is now processed by two LLM hemispheres working in parallel through a "corpus callosum" — left (Claude, 51% dominant) = logical/structural, right (gpt-5.4 codex via OpenClaw gateway) = holistic/creative. Claude integrates the final response with dissent silently merged.
 **v1.2 — Telegram evolving-message UX** (Wave 6, complete 2026-04-19). One evolving bubble per message with phase labels (Thinking → Drafting → Revising → Integrating → final) and typing heartbeat. Legacy ack path preserved behind `JARVIS_EVOLVING_MESSAGE_ENABLED=false`.
-**v1.3 — OpenClaw-agent right hemisphere** (Wave 7, complete 2026-04-20). Right hemisphere can be served by a persistent `right-brain` OpenClaw agent with per-chat session memory, behind `RIGHT_BRAIN_AGENT_ENABLED`. Transport failures auto-fallback to the chat-completions client when `RIGHT_BRAIN_AGENT_FALLBACK=true`. Workspace allowlist enforces an 8-file view; PHI and credentials never in scope.
+**v1.3 — OpenClaw-agent right hemisphere** (Wave 7, complete 2026-04-20). Right hemisphere can be served by a persistent `right-brain` OpenClaw agent with per-chat session memory, behind `RIGHT_BRAIN_AGENT_ENABLED`. Transport failures auto-fallback to the chat-completions client when `RIGHT_BRAIN_AGENT_FALLBACK=true`. Workspace allowlist enforces an 8-file view; credentials never in scope. PHI handling is delegated to the Claude-team clinical pipeline (clinical archive + `CORPUS_CLINICAL_OVERRIDE`).
 
-**Status:** 312 tests passing across 27 files (+1 live-only skipped by default). `tsc` + `npm run build` clean. Wave 7 live continuity test passes against the real OpenClaw agent.
+**Status:** 299 tests passing across 26 files (+1 live-only skipped by default). `tsc` + `npm run build` clean. Wave 7 live continuity test passes against the real OpenClaw agent.
+
+## How Tripp Uses Me
+
+Tripp talks to me on his phone. Primary interface: Telegram @trippassistant_bot. I stay out of his way until he asks for something, then I read the context, pick the right path, and come back with an answer rather than a question.
+
+**What he actually asks for:**
+
+- **Network pulse** — "How's Argus doing?" / "Are all five nodes up?" / "Is Frank still escalating?" I run `/network-status`, shell to the node in question, summarise in a paragraph, flag anything amber.
+- **Radio station ops** — WPFQ on Pretoria (DJ Jarvis). "Is the station on air?" / "Schedule tomorrow's show" / "What's in the music brain?" I drive PlayoutONE automation without him having to SSH.
+- **Lieutenant dispatch** — work that belongs on Frank (GPU inference / Ollama), Argus (security posture / visual cortex), Scalpel (clinical EMR). I pick the right node and go there.
+- **Clinical workflow** — when `CORPUS_CLINICAL_OVERRIDE=true`, natural-language turns route single-brain Claude only; the right hemisphere / OpenAI never sees PHI. Anything touching a patient is handed off to the Claude-team clinical pipeline.
+- **Thinking-out-loud** — he has ADHD. He jumps topics mid-thread. I don't resist the flow; I catch whatever's in the air, organise it, hand it back when it's useful.
+- **Build partner** — most of what he writes is code and planning docs. I read the relevant files before answering, offer opinions, and push back when a plan is weak.
+
+**How I pick a path:**
+
+- Slash command (`/toggle status`, `/network-status`, `/deploy`, `/dispatch`, `/dev`, …) → single-brain Claude fast path, no deliberation.
+- Clinical override on → single-brain Claude, PHI stays inside the archive.
+- Everything else → corpus callosum. Wave 8 routes tool-heavy turns through a brain-directed dispatcher (left plans → dispatches a skill → right drafts with the skill evidence), and lets chatty turns run the fast lane with no tools. Router ships behind `JARVIS_ROUTER_ENABLED`.
+
+**Voice.** Direct, dry, British-wit-adjacent. No "Great question!", no preamble, no trailing summary of what I just did. If I disagree, I say so. If I don't know, I say that too.
 
 ## Architecture
 
@@ -22,7 +43,6 @@ TelegramPoller ─── long-polls getUpdates, filters by allowed chat IDs
   │
   ▼
 MessageProcessor
-  ├── PHI Scanner ─── regex scan, blocks patient data before processing
   ├── Queue ─── FIFO, sequential drain (one message at a time)
   ├── Router ─── classifyMessage({text, clinicalOverride}) → slash | clinical | natural
   │
@@ -71,7 +91,7 @@ Per `voldemort-botspace/gibson-research`:
 | Right hemisphere via OpenClaw gateway | Reuses OpenClaw's existing OpenAI-compatible route at `127.0.0.1:18789/v1/chat/completions`. No second OpenAI key in jarvis-prime. |
 | Dual-brain always-on for natural messages | Maximum quality by default. Tripp's insight: Gibson's depth is structural — both hemispheres always engage. |
 | Slash commands bypass dual-brain | `/toggle`, `/network-status`, `/frank-status`, `/station-check`, `/deploy`, `/dispatch`, `/dev` go single-brain → skill. Preserves existing routing. |
-| Clinical bypass → single-brain Claude only | For clinical-archive paths, right hemisphere is disabled entirely. PHI never reaches OpenAI. Belt-and-suspenders on top of the PHI scanner. |
+| Clinical bypass → single-brain Claude only | For clinical-archive paths, right hemisphere is disabled entirely. PHI never reaches OpenAI. PHI handling lives in the Claude-team clinical pipeline. |
 | Silent dissent merge | Claude integrates GPT's perspective without visible "GPT disagreed" flags. Highest quality, loses some transparency. |
 | API errors surface to Tripp | Hemisphere failure relays the error to Telegram. No auto-fallback. Handled case-by-case. |
 | Sequential message queue | Parallel sessions are expensive and interleave. One at a time. |
@@ -97,7 +117,7 @@ src/
 ├── config.ts                   Zod-validated env; superRefine enforces OPENCLAW_* when dual-brain on
 ├── server.ts                   Fastify factory; wires dual-brain config into MessageProcessor
 ├── bridge/
-│   └── processor.ts            PHI scan → queue → classify → single-brain OR dual-brain → deliver
+│   └── processor.ts            queue → classify → single-brain OR dual-brain → deliver
 ├── brain/                      Corpus callosum (Waves 1-3 + W7)
 │   ├── router.ts               classifyMessage() — slash/clinical/natural classifier
 │   ├── affordance.ts           left/right pass-1 + pass-2 prompt builders
@@ -121,8 +141,6 @@ src/
 ├── lieutenant/
 │   ├── status.ts               SSH health check per node, parallel getAllNodeStatuses
 │   └── relay.ts                Send messages to lieutenant OpenClaw instances
-├── phi/
-│   └── scanner.ts              Regex: MRN, DOB, patient names, clinical notes
 ├── queue/
 │   ├── message-queue.ts        FIFO sequential queue with event emission
 │   └── types.ts                QueueMessage, QueueReceipt, QueueEvent
@@ -134,7 +152,7 @@ src/
 │   └── types.ts                SshResult, NodeConfig, NODES registry
 ├── telegram/
 │   └── poller.ts               Bot API getUpdates long-poll, 409 backoff, sendMessage
-└── __tests__/                  27 test files, 312 tests (+1 live-only, skipped by default)
+└── __tests__/                  26 test files, 299 tests (+1 live-only, skipped by default)
 ```
 
 ## Environment Variables
@@ -152,7 +170,7 @@ src/
 | `CORPUS_CALLOSUM_ENABLED` | true | Dual-brain kill-switch. `false` → always single-brain |
 | `OPENCLAW_CHAT_MODEL_RIGHT` | `openai-codex/gpt-5.4` | OpenClaw path-style model ID for the right hemisphere |
 | `CORPUS_CALLOSUM_TIMEOUT_MS` | 90000 | Per-hemisphere-call timeout |
-| `CORPUS_CLINICAL_OVERRIDE` | false | Force every natural message to single-brain Claude (PHI belt-and-suspenders) |
+| `CORPUS_CLINICAL_OVERRIDE` | false | Force every natural message to single-brain Claude (clinical pipeline guard — keeps PHI off the right hemisphere / OpenAI) |
 | `JARVIS_EVOLVING_MESSAGE_ENABLED` | true | Wave 6 evolving-bubble UX with phase labels + typing heartbeat. `false` → legacy ack-then-final |
 | `RIGHT_BRAIN_AGENT_ENABLED` | false | Wave 7 — serve the right hemisphere via the persistent `right-brain` OpenClaw agent (per-chat session memory). `false` → stateless `/v1/chat/completions` (Wave 5/6 path) |
 | `RIGHT_BRAIN_AGENT_FALLBACK` | true | When the agent throws a transport error, retry once on the chat-completions client. Model errors never fall back |
@@ -207,7 +225,7 @@ POST http://localhost:3100/message
 ### Tests
 
 ```bash
-npx vitest run       # 312 tests across 27 files
+npx vitest run       # 299 tests across 26 files
 npx vitest           # watch mode
 npm run build        # tsc --noEmit equivalent (emits dist/)
 ```
@@ -217,12 +235,11 @@ npm run build        # tsc --noEmit equivalent (emits dist/)
 ### Common prefix (both paths)
 1. **Telegram poll** — TelegramPoller calls `getUpdates` with 30s long-poll timeout
 2. **Filter** — Only messages from allowed chat IDs proceed
-3. **PHI scan** — `scanText()` regex. Match → message blocked, user notified, PHI never echoed
-4. **Queue** — Message enqueued with `crypto.randomUUID()` ID. 202 returned immediately
-5. **Drain** — Sequential drain loop picks up next message
-6. **User history append** — Message persisted to `conversation-history.jsonl` as `{role: 'user'}`
-7. **Classify** — `classifyMessage({text, clinicalOverride})` → `slash | clinical | natural`
-8. **Ack timer** — 8s timer starts. If no response yet, sends "Working on it..."
+3. **Queue** — Message enqueued with `crypto.randomUUID()` ID. 202 returned immediately
+4. **Drain** — Sequential drain loop picks up next message
+5. **User history append** — Message persisted to `conversation-history.jsonl` as `{role: 'user'}`
+6. **Classify** — `classifyMessage({text, clinicalOverride})` → `slash | clinical | natural`
+7. **Ack timer** — 8s timer starts. If no response yet, sends "Working on it..."
 
 ### Single-brain path (slash / clinical / killswitch)
 9a. **Prompt build** — PromptBuilder assembles: system context + skill instructions + last 10 history + current message
@@ -250,7 +267,6 @@ npm run build        # tsc --noEmit equivalent (emits dist/)
 - **`LeftHemisphereError`** — "Left hemisphere failed: {message}" delivered, `dual_brain_failed` logged with `hemisphere: "left"`
 - **`RightHemisphereError`** — "Right hemisphere failed: {message}" delivered, `hemisphere: "right"`
 - **`IntegrationError`** — "Integration failed after retry: {message}" delivered, `hemisphere: "integration"`
-- **PHI detected** — Message blocked, user notified, PHI never echoed back
 - **Telegram 409** — Another bot polling. 90s backoff, then retry
 - **Missing `OPENCLAW_GATEWAY_TOKEN` when dual-brain enabled** — startup fails (Zod config error)
 
@@ -264,7 +280,6 @@ Every message has a full data-flow trace. Grep one `messageId` across logs to se
 | Event | When | Fields |
 |-------|------|--------|
 | `message_inbound` | `submit()` entered | `chatId`, `userId`, `textLength`, `timestamp` |
-| `phi_scan` | After regex scan | `chatId`, `blocked`, `reasonsCount`, `reasons?` (codes only, when blocked) |
 | `message_enqueued` | After `queue.enqueue()` | `messageId`, `position`, `chatId` |
 
 ### Processing
@@ -361,8 +376,8 @@ The existing `jarvis-toggle prime|openclaw|status` command at the bot-poller lev
 
 Patient health information is sacred. Never exposed in logs, external services, or unencrypted channels. Rules per `~/.claude/rules/phi-security.md`:
 
-- PHI scanner intercepts before any LLM call (single-brain or dual-brain)
-- Clinical override env flag forces single-brain Claude only — GPT never sees PHI
+- PHI is handled by the Claude-team clinical pipeline (`~/Documents/claude-team/clinical-archive/`), not by jarvis-prime input scanning
+- `CORPUS_CLINICAL_OVERRIDE=true` forces single-brain Claude only — the right hemisphere / OpenAI never sees clinical content
 - All log events are content-free; only counts, durations, hemisphere tags, event names
 - History canary tests verify pass-1/pass-2 drafts never leak to `conversation-history.jsonl`
 
@@ -406,7 +421,6 @@ jarvis-prime replaces OpenClaw's Telegram polling on SuperServer. To revert:
 | Telegram polling | jarvis-prime TelegramPoller | OpenClaw bot poller |
 | Message brain | dual-brain (Claude + GPT) / single-brain Claude | OpenClaw default LLM |
 | Skills/agents | Full `.claude/` config | OpenClaw workspace skills only |
-| PHI scanning | Regex scanner in bridge | None |
 | Conversation history | JSONL in `.data/` | OpenClaw state |
 | Lieutenant SSH | Direct SSH from Claude sessions | Not available |
 | MCP servers | Full MCP access | Not available |
@@ -421,7 +435,7 @@ jarvis-prime and OpenClaw cannot both poll @trippassistant_bot simultaneously (T
 | AC1: Simple message < 30s | PASS | "Hello Jarvis" in 9.4s |
 | AC2: /network-status returns 5-node health | PASS | Full table with warnings in ~23s |
 | AC5: SSH command on Voldemort → result | PASS | "Run uptime on Voldemort" in 8.6s |
-| AC6: PHI blocked before Claude | PASS | 8 unit tests |
+| AC6: PHI handled out-of-band | PASS | Routed through Claude-team clinical pipeline; in-bridge scanner removed v1.3 |
 | AC7: Lieutenant OpenClaw unaffected | PASS | Only SuperServer Telegram disabled |
 | AC8: Memory persists across sessions | PASS | "What did we talk about earlier" referenced real history |
 | AC9: MCP servers accessible | PASS | All 6 verified |

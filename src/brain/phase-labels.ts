@@ -16,9 +16,11 @@ export type OrchestratorKind = 'natural' | 'slash' | 'clinical' | 'killswitch'
 export const INITIAL_ACK_LABEL = 'Thinking…'
 
 const NATURAL_LABELS: Record<string, string> = {
+  router_plan_start: 'Planning…',
   callosum_pass1_start: 'Drafting…',
   callosum_pass2_start: 'Revising…',
   callosum_integration_start: 'Integrating…',
+  self_correction_retry_start: 'Re-planning…',
 }
 
 const SINGLE_BRAIN_LABELS: Record<string, string> = {

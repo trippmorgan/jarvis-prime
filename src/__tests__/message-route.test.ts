@@ -72,18 +72,6 @@ describe('POST /message', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  it('blocks PHI with 422', async () => {
-    const response = await server.inject({
-      method: 'POST',
-      url: '/message',
-      payload: { chatId: '123', text: 'patient John Smith was admitted', userId: 'user1' },
-    })
-
-    expect(response.statusCode).toBe(422)
-    const body = JSON.parse(response.body)
-    expect(body.error).toBe('phi_blocked')
-  })
-
   it('calls spawnClaude after processing', async () => {
     vi.mocked(spawnClaude).mockResolvedValue({
       output: 'Test response',

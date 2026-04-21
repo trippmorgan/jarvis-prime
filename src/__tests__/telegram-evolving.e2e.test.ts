@@ -131,7 +131,7 @@ describe('Wave 6 evolving-UX E2E (Sub-wave 6.4 — W6-T7/T8/T9)', () => {
     vi.clearAllMocks()
   })
 
-  it('T7: natural dual-brain — initial ack + phase edits + integrated finalize, 5 hemisphere calls, typing fires', async () => {
+  it('T7: natural dual-brain — ack + phase edits + deliberation card pinned to ack + integrated answer in a fresh bubble', async () => {
     const left = makeFakeHemisphere([
       { content: 'L1-DRAFT' },
       { content: 'L2-REVISED' },
@@ -152,18 +152,19 @@ describe('Wave 6 evolving-UX E2E (Sub-wave 6.4 — W6-T7/T8/T9)', () => {
 
     processor.submit('chat-A', 'What is Gibson\'s theory of affordances?', 'user-A')
 
-    // Wait for finalize to land (last editMessageText carries the integrated text).
+    // Wait for the integrated answer to land as a NEW bubble (postBubble => sendMessageAndGetId).
     await waitFor(() =>
-      surface.editMessageText.mock.calls.some(([, , text]) => text === 'INTEGRATED-FINAL'),
+      surface.sendMessageAndGetId.mock.calls.some(([, text]) => text === 'INTEGRATED-FINAL'),
       5000,
     )
 
     // Let the debounce window drain so any trailing flush has fired.
     await new Promise((r) => setTimeout(r, 1100))
 
-    // Initial ack fired exactly once with the opaque "Thinking…" label.
-    expect(surface.sendMessageAndGetId).toHaveBeenCalledTimes(1)
-    expect(surface.sendMessageAndGetId).toHaveBeenCalledWith('chat-A', 'Thinking…')
+    // sendMessageAndGetId fires twice: first the ack, then the integrated answer.
+    expect(surface.sendMessageAndGetId).toHaveBeenCalledTimes(2)
+    expect(surface.sendMessageAndGetId.mock.calls[0]).toEqual(['chat-A', 'Thinking…'])
+    expect(surface.sendMessageAndGetId.mock.calls[1]).toEqual(['chat-A', 'INTEGRATED-FINAL'])
 
     // 5 hemisphere calls — dual-brain orchestrator really ran.
     expect(left.calls.length).toBe(3)
@@ -173,15 +174,18 @@ describe('Wave 6 evolving-UX E2E (Sub-wave 6.4 — W6-T7/T8/T9)', () => {
     expect(surface.sendChatAction).toHaveBeenCalled()
     expect(surface.sendChatAction.mock.calls[0]).toEqual(['chat-A', 'typing'])
 
-    // Edit sequence: must end with the integrated final text…
+    // Edit sequence: must include at least one transparent dual-brain label…
     const editedTexts = surface.editMessageText.mock.calls.map(([, , text]) => text as string)
-    expect(editedTexts[editedTexts.length - 1]).toBe('INTEGRATED-FINAL')
-
-    // …and must include at least one of the transparent dual-brain labels.
     const labeledEdit = editedTexts.find((t) =>
       t === 'Drafting…' || t === 'Revising…' || t === 'Integrating…',
     )
     expect(labeledEdit).toBeDefined()
+
+    // …and must end with the deliberation card containing both pass-2 drafts.
+    const lastEdit = editedTexts[editedTexts.length - 1]
+    expect(lastEdit).toContain('Two-brain deliberation')
+    expect(lastEdit).toContain('L2-REVISED')
+    expect(lastEdit).toContain('R2-REVISED')
 
     // Every edit targets the ack message id the surface returned.
     for (const [chatId, msgId] of surface.editMessageText.mock.calls) {

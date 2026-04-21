@@ -60,6 +60,7 @@ export function buildServer(config: Config): ServerContext {
       evolvingMessageEnabled: config.JARVIS_EVOLVING_MESSAGE_ENABLED,
       rightBrainAgentEnabled: config.RIGHT_BRAIN_AGENT_ENABLED,
       rightBrainAgentFallback: config.RIGHT_BRAIN_AGENT_FALLBACK,
+      routerEnabled: config.JARVIS_ROUTER_ENABLED,
       telegramSurface,
     },
     deliver,

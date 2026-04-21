@@ -58,7 +58,13 @@ describe("spawnClaude", () => {
     // Verify spawn was called with correct args
     expect(mockSpawn).toHaveBeenCalledWith(
       "/home/tripp/.local/bin/claude",
-      ["--print", "--model", "sonnet", "--dangerously-skip-permissions"],
+      [
+        "--print",
+        "--model", "sonnet",
+        "--dangerously-skip-permissions",
+        "--tools", "",
+        "--disable-slash-commands",
+      ],
       expect.objectContaining({
         cwd: "/home/tripp/.openclaw/workspace/jarvis-prime/",
         stdio: ["pipe", "pipe", "pipe"],
@@ -143,7 +149,13 @@ describe("spawnClaude", () => {
 
     expect(mockSpawn).toHaveBeenCalledWith(
       "/custom/claude",
-      ["--print", "--model", "opus", "--dangerously-skip-permissions"],
+      [
+        "--print",
+        "--model", "opus",
+        "--dangerously-skip-permissions",
+        "--tools", "",
+        "--disable-slash-commands",
+      ],
       expect.objectContaining({ cwd: "/tmp/test" }),
     );
   });

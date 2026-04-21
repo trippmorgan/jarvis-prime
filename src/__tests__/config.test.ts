@@ -24,6 +24,7 @@ const KEYS = [
   'JARVIS_EVOLVING_MESSAGE_ENABLED',
   'RIGHT_BRAIN_AGENT_ENABLED',
   'RIGHT_BRAIN_AGENT_FALLBACK',
+  'JARVIS_ROUTER_ENABLED',
 ] as const
 
 let savedEnv: Record<string, string | undefined>
@@ -72,11 +73,11 @@ describe('loadConfig defaults', () => {
     expect(cfg.OPENCLAW_CHAT_MODEL_RIGHT).toBe('gpt-5.4 codex')
   })
 
-  it('defaults CORPUS_CALLOSUM_TIMEOUT_MS to 90000', () => {
+  it('defaults CORPUS_CALLOSUM_TIMEOUT_MS to 240000', () => {
     process.env.OPENCLAW_GATEWAY_URL = 'http://127.0.0.1:18789'
     process.env.OPENCLAW_GATEWAY_TOKEN = 'test-token'
     const cfg = loadConfig()
-    expect(cfg.CORPUS_CALLOSUM_TIMEOUT_MS).toBe(90_000)
+    expect(cfg.CORPUS_CALLOSUM_TIMEOUT_MS).toBe(240_000)
   })
 
   it('defaults JARVIS_EVOLVING_MESSAGE_ENABLED to true (W6-T1)', () => {
@@ -192,6 +193,28 @@ describe('loadConfig RIGHT_BRAIN_AGENT_FALLBACK (W7-T2)', () => {
     process.env.RIGHT_BRAIN_AGENT_FALLBACK = 'true'
     const cfg = loadConfig()
     expect(cfg.RIGHT_BRAIN_AGENT_FALLBACK).toBe(true)
+  })
+})
+
+describe('loadConfig JARVIS_ROUTER_ENABLED (W8-T2)', () => {
+  it('defaults JARVIS_ROUTER_ENABLED to false (ships dark)', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    const cfg = loadConfig()
+    expect(cfg.JARVIS_ROUTER_ENABLED).toBe(false)
+  })
+
+  it('parses "true" as true', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.JARVIS_ROUTER_ENABLED = 'true'
+    const cfg = loadConfig()
+    expect(cfg.JARVIS_ROUTER_ENABLED).toBe(true)
+  })
+
+  it('parses "false" as false when explicitly set', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.JARVIS_ROUTER_ENABLED = 'false'
+    const cfg = loadConfig()
+    expect(cfg.JARVIS_ROUTER_ENABLED).toBe(false)
   })
 })
 

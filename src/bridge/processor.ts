@@ -2,11 +2,15 @@ import type { FastifyBaseLogger } from 'fastify'
 import { spawnClaude } from '../claude/spawner.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
-import { scanText } from '../phi/scanner.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
 import { classifyMessage, type MessageKind } from '../brain/router.js'
-import { corpusCallosum } from '../brain/corpus-callosum.js'
+import {
+  corpusCallosum,
+  type CallosumEventPayload,
+  type SkillShim,
+} from '../brain/corpus-callosum.js'
+import { RightBrainSkillShim } from '../brain/right-brain-skill-shim.js'
 import { LeftHemisphereClient } from '../brain/left-hemisphere.js'
 import { RightHemisphereClient } from '../brain/right-hemisphere.js'
 import { makeRightClient } from '../brain/right-client-factory.js'
@@ -50,7 +54,7 @@ export type OrchestratorFn = (input: {
    */
   chatId: string
   /** Optional phase-event callback used by the evolving-message UX. */
-  onEvent?: (eventName: string) => void
+  onEvent?: (eventName: string, payload?: CallosumEventPayload) => void
 }) => Promise<BrainResult>
 
 export interface ProcessorConfig {
@@ -91,6 +95,17 @@ export interface ProcessorConfig {
    * ack + deliver() path is used regardless of evolvingMessageEnabled.
    */
   telegramSurface?: TelegramSendSurface
+  /**
+   * W8-T14 — when true, dual-brain turns use the router flow (left plans,
+   * dispatches, right drafts with skill evidence or research focus). When
+   * false (default), the legacy Wave-7 parallel-pass-1 flow runs byte-for-byte.
+   */
+  routerEnabled?: boolean
+  /**
+   * W8-T14 — optional skill shim injection (defaults to RightBrainSkillShim).
+   * Only consumed when routerEnabled=true.
+   */
+  skillShim?: SkillShim
 }
 
 export class MessageProcessor {
@@ -121,6 +136,12 @@ export class MessageProcessor {
         logger: this.log,
       })
       const timeoutMs = config.corpusCallosumTimeoutMs
+      const routerEnabled = config.routerEnabled === true
+      // Skill shim is only meaningful in router mode; lazy-construct a default
+      // when routerEnabled is on and the caller didn't inject one.
+      const skillShim: SkillShim | undefined = routerEnabled
+        ? config.skillShim ?? new RightBrainSkillShim({ logger: this.log })
+        : undefined
       this.orchestrator = async (input) => {
         const rightClient = makeRightClient({
           rightBrainAgentEnabled: config.rightBrainAgentEnabled === true,
@@ -139,6 +160,8 @@ export class MessageProcessor {
             timeoutMs,
             logger: this.log,
             onEvent: input.onEvent,
+            routerEnabled,
+            skillShim,
           },
           { userMsg: input.userMsg, history: input.history },
         )
@@ -164,7 +187,7 @@ export class MessageProcessor {
     })
   }
 
-  submit(chatId: string, text: string, userId: string): { blocked: boolean; messageId?: string; position?: number; reasons?: string[] } {
+  submit(chatId: string, text: string, userId: string): { messageId: string; position: number } {
     this.log.info(
       {
         event: 'message_inbound',
@@ -174,32 +197,6 @@ export class MessageProcessor {
         timestamp: Date.now(),
       },
       'message inbound',
-    )
-
-    const phiResult = scanText(text)
-    if (phiResult.blocked) {
-      this.log.warn(
-        {
-          event: 'phi_scan',
-          chatId,
-          blocked: true,
-          reasonsCount: phiResult.reasons.length,
-          reasons: phiResult.reasons,
-        },
-        'PHI detected — message blocked',
-      )
-      this.deliver(chatId, 'PHI detected — message blocked for security. Please use the clinical pipeline for patient data.').catch(() => {})
-      return { blocked: true, reasons: phiResult.reasons }
-    }
-
-    this.log.info(
-      {
-        event: 'phi_scan',
-        chatId,
-        blocked: false,
-        reasonsCount: 0,
-      },
-      'phi scan clear',
     )
 
     const receipt = this.queue.enqueue({ chatId, text, userId })
@@ -218,7 +215,7 @@ export class MessageProcessor {
       this.deliver(chatId, `Queued (position ${receipt.position}). I'll get to this shortly.`).catch(() => {})
     }
 
-    return { blocked: false, messageId: receipt.id, position: receipt.position }
+    return { messageId: receipt.id, position: receipt.position }
   }
 
   getQueueLength(): number {
@@ -630,6 +627,7 @@ export class MessageProcessor {
   ): Promise<string> {
     const responder = this.responder!
     const stopTyping = responder.startTyping(msg.chatId)
+    let cardPosted = false
 
     try {
       const basePrompt = this.promptBuilder.build(msg.text)
@@ -654,7 +652,63 @@ export class MessageProcessor {
         'dual-brain call start',
       )
 
-      const onEvent = (eventName: string): void => {
+      const onEvent = (
+        eventName: string,
+        payload?: CallosumEventPayload,
+      ): void => {
+        if (
+          eventName === 'callosum_pass2_ok' &&
+          payload &&
+          typeof payload.p2Left === 'string' &&
+          typeof payload.p2Right === 'string'
+        ) {
+          const hasRouterEvidence =
+            payload.leftTools !== undefined ||
+            payload.rightMode !== undefined
+          const card = formatDeliberationCard(
+            payload.p2Left,
+            payload.p2Right,
+            payload.leftMs ?? 0,
+            payload.rightMs ?? 0,
+            hasRouterEvidence
+              ? {
+                  leftTools: payload.leftTools,
+                  rightMode: payload.rightMode,
+                  rightSkill: payload.rightSkill,
+                }
+              : undefined,
+          )
+          // Pin the deliberation card to the original ack bubble so the
+          // conversation reads top-down: status → card → integrated answer.
+          responder.finalize(msg.chatId, ackMessageId, card).catch(() => {})
+          cardPosted = true
+          this.log.info(
+            {
+              event: 'deliberation_card_posted',
+              messageId: msg.id,
+              leftLen: payload.p2Left.length,
+              rightLen: payload.p2Right.length,
+              leftMs: payload.leftMs,
+              rightMs: payload.rightMs,
+            },
+            'deliberation card posted',
+          )
+          return
+        }
+        // Once the card is pinned, subsequent phase labels (e.g. "Integrating…")
+        // would overwrite it — silently drop them. One exception: W8-T14
+        // `self_correction_retry_start` is the permitted post-card edit so the
+        // user sees "Re-planning…" while Claude runs the bounded retry. The
+        // final answer still posts as a fresh bubble below the ack.
+        if (cardPosted) {
+          if (eventName === 'self_correction_retry_start') {
+            const label = phaseLabelForEvent(eventName, 'natural')
+            if (label) {
+              responder.updatePhase(msg.chatId, ackMessageId, label)
+            }
+          }
+          return
+        }
         const label = phaseLabelForEvent(eventName, 'natural')
         if (label) {
           responder.updatePhase(msg.chatId, ackMessageId, label)
@@ -679,7 +733,17 @@ export class MessageProcessor {
         },
         'history assistant appended',
       )
-      await responder.finalize(msg.chatId, ackMessageId, output)
+
+      if (cardPosted) {
+        // Card already pinned to the ack bubble — ship the integrated answer
+        // as one or more fresh bubbles below it.
+        await this.deliverNewBubbles(msg.id, msg.chatId, output)
+      } else {
+        // No pass-2 payload arrived (test stub or pre-pass-2 short-circuit) —
+        // preserve the original behaviour: integrated answer goes into the
+        // ack bubble.
+        await responder.finalize(msg.chatId, ackMessageId, output)
+      }
 
       this.log.info(
         {
@@ -697,12 +761,59 @@ export class MessageProcessor {
       return output
     } catch (err) {
       const errorMsg = this.formatDualBrainError(err, msg.id)
-      await responder.finalize(msg.chatId, ackMessageId, errorMsg).catch(() => {})
+      if (cardPosted) {
+        await this.deliverNewBubbles(msg.id, msg.chatId, errorMsg).catch(() => {})
+      } else {
+        await responder.finalize(msg.chatId, ackMessageId, errorMsg).catch(() => {})
+      }
       this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'error', 'evolving')
       return errorMsg
     } finally {
       stopTyping()
     }
+  }
+
+  /**
+   * Post the integrated answer (or error text) as one or more fresh Telegram
+   * bubbles. Used after a deliberation card has finalized the ack bubble; the
+   * integrated answer can't squeeze into an editMessageText slot because
+   * Telegram caps edits at 4096 chars and the card is already there.
+   */
+  private async deliverNewBubbles(
+    messageId: string,
+    chatId: string,
+    text: string,
+  ): Promise<void> {
+    const responder = this.responder!
+    const chunks = splitMessage(text, TELEGRAM_MAX_LENGTH)
+    const start = Date.now()
+    this.log.info(
+      {
+        event: 'delivery_start',
+        messageId,
+        chatId,
+        chunks: chunks.length,
+        totalLength: text.length,
+      },
+      'delivery start',
+    )
+    let outcome: 'success' | 'error' = 'success'
+    for (const chunk of chunks) {
+      const id = await responder.postBubble(chatId, chunk)
+      if (id == null) outcome = 'error'
+    }
+    this.log.info(
+      {
+        event: 'delivery_end',
+        messageId,
+        chatId,
+        chunks: chunks.length,
+        totalLength: text.length,
+        deliveryMs: Date.now() - start,
+        outcome,
+      },
+      'delivery end',
+    )
   }
 
   /** Shared error classification + logging for dual-brain paths. */
@@ -795,6 +906,79 @@ export class MessageProcessor {
       'delivery end',
     )
   }
+}
+
+/**
+ * Evidence passed to the deliberation card to render per-hemisphere
+ * tool/skill summaries. Absent in legacy mode (no router) — the card then
+ * falls back to the "Claude"/"GPT" provider labels.
+ */
+export interface DeliberationEvidence {
+  /** Tool calls the left hemisphere made in pass-1. Empty array = no tools. */
+  leftTools?: readonly { name: string; durationMs: number }[]
+  /** Right hemisphere mode: "skill" (ran one via shim) or "research" (workspace memory). */
+  rightMode?: 'skill' | 'research'
+  /** Skill name when rightMode === 'skill'. */
+  rightSkill?: string
+}
+
+/**
+ * Render the two pass-2 hemisphere drafts into a single Telegram bubble.
+ * Each draft is clipped to MAX_PER_DRAFT chars so the combined card stays
+ * under Telegram's 4096-char message limit (header + 2×1500 + spacing ≈ 3100).
+ *
+ * W8-T13 — router-mode `evidence` replaces the provider labels with:
+ *   Left  — "ran <tool-names>" OR "drafted"
+ *   Right — "<skill-name>"     OR "researched"
+ * Legacy mode (no evidence) keeps the original "Claude" / "GPT" labels.
+ */
+export function formatDeliberationCard(
+  p2Left: string,
+  p2Right: string,
+  leftMs: number,
+  rightMs: number,
+  evidence?: DeliberationEvidence,
+): string {
+  const MAX_PER_DRAFT = 1500
+  const truncate = (s: string): string => {
+    const trimmed = s.trim()
+    if (trimmed.length <= MAX_PER_DRAFT) return trimmed
+    return trimmed.slice(0, MAX_PER_DRAFT) + '… [truncated]'
+  }
+  const left = truncate(p2Left)
+  const right = truncate(p2Right)
+  const leftSec = (leftMs / 1000).toFixed(1)
+  const rightSec = (rightMs / 1000).toFixed(1)
+
+  let leftLabel: string
+  let rightLabel: string
+  if (evidence) {
+    const tools = evidence.leftTools ?? []
+    leftLabel =
+      tools.length > 0
+        ? `ran ${tools.map((t) => t.name).join(', ')}`
+        : 'drafted'
+    if (evidence.rightMode === 'skill' && evidence.rightSkill) {
+      rightLabel = evidence.rightSkill
+    } else if (evidence.rightMode === 'research') {
+      rightLabel = 'researched'
+    } else {
+      rightLabel = 'drafted'
+    }
+  } else {
+    leftLabel = 'Claude'
+    rightLabel = 'GPT'
+  }
+
+  return [
+    '🧠 Two-brain deliberation',
+    '',
+    `🔵 Left (${leftLabel} · ${leftSec}s):`,
+    left,
+    '',
+    `🟠 Right (${rightLabel} · ${rightSec}s):`,
+    right,
+  ].join('\n')
 }
 
 export function splitMessage(text: string, maxLen: number = TELEGRAM_MAX_LENGTH): string[] {

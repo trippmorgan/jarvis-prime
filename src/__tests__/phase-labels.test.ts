@@ -75,6 +75,30 @@ describe('phaseLabelForEvent', () => {
     })
   })
 
+  describe('Wave 8 router events (W8-T4)', () => {
+    it('maps natural + router_plan_start → Planning…', () => {
+      expect(phaseLabelForEvent('router_plan_start', 'natural')).toBe(
+        'Planning…'
+      )
+    })
+
+    it('maps natural + self_correction_retry_start → Re-planning…', () => {
+      expect(phaseLabelForEvent('self_correction_retry_start', 'natural')).toBe(
+        'Re-planning…'
+      )
+    })
+
+    it('returns null for slash + router_plan_start (router is natural-only)', () => {
+      expect(phaseLabelForEvent('router_plan_start', 'slash')).toBeNull()
+    })
+
+    it('returns null for clinical + self_correction_retry_start', () => {
+      expect(
+        phaseLabelForEvent('self_correction_retry_start', 'clinical')
+      ).toBeNull()
+    })
+  })
+
   describe('unknown events', () => {
     it('returns null for a completely unknown event on natural', () => {
       expect(phaseLabelForEvent('bogus_event', 'natural')).toBeNull()

@@ -27,6 +27,8 @@ export async function spawnClaude(
     "--print",
     "--model", model,
     "--dangerously-skip-permissions",
+    "--tools", "",
+    "--disable-slash-commands",
   ];
 
   const start = performance.now();

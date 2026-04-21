@@ -18,10 +18,6 @@ export function registerMessageRoute(server: FastifyInstance, processor: Message
     const { chatId, text, userId } = parsed.data
     const result = processor.submit(chatId, text, userId)
 
-    if (result.blocked) {
-      return reply.code(422).send({ error: 'phi_blocked', reasons: result.reasons })
-    }
-
     return reply.code(202).send({
       queued: true,
       messageId: result.messageId,

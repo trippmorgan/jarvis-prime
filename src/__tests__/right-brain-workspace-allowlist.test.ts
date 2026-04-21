@@ -110,13 +110,19 @@ describe('right-brain-workspace allowlist (W7-T4 — AC7.4 + AC7.5)', () => {
     }
   })
 
-  testFn('no regular files exist outside of OpenClaw-managed .openclaw/ dir', () => {
+  testFn('no regular files exist outside of OpenClaw-managed .openclaw/ and tmp/', () => {
+    // tmp/ is agent scratch: right-brain-agent writes transient session artifacts
+    // (images sent for visual analysis, fetched content) there during Telegram turns.
+    // The PHI/credentials blocklist below still applies — tmp/ is scope-limited to
+    // "binary scratch, never persisted into memory files", not "anything goes".
     const entries = walk(WORKSPACE)
     const stray = entries.filter(
       (e) =>
         e.kind === 'file' &&
         !e.relPath.startsWith('.openclaw/') &&
-        e.relPath !== '.openclaw',
+        e.relPath !== '.openclaw' &&
+        !e.relPath.startsWith('tmp/') &&
+        e.relPath !== 'tmp',
     )
     expect(stray, `unexpected regular files: ${stray.map((s) => s.relPath).join(', ')}`).toEqual([])
   })

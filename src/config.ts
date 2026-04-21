@@ -34,11 +34,12 @@ const baseSchema = z.object({
   DELIVERY_QUEUE_DIR: z.string().default("/home/tripp/.openclaw/delivery-queue"),
   CORPUS_CALLOSUM_ENABLED: boolFromEnv(true),
   OPENCLAW_CHAT_MODEL_RIGHT: z.string().default("gpt-5.4 codex"),
-  CORPUS_CALLOSUM_TIMEOUT_MS: z.coerce.number().default(90_000),
+  CORPUS_CALLOSUM_TIMEOUT_MS: z.coerce.number().default(240_000),
   CORPUS_CLINICAL_OVERRIDE: boolFromEnv(false),
   JARVIS_EVOLVING_MESSAGE_ENABLED: boolFromEnv(true),
   RIGHT_BRAIN_AGENT_ENABLED: boolFromEnv(false),
   RIGHT_BRAIN_AGENT_FALLBACK: boolFromEnv(true),
+  JARVIS_ROUTER_ENABLED: boolFromEnv(false),
 });
 
 /**

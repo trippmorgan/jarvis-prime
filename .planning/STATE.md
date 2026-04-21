@@ -1,11 +1,11 @@
 # Project State: Jarvis Prime — Unified Command Runtime
 
-> Last updated: 2026-04-16
+> Last updated: 2026-04-20
 
 ## Current Phase
-**Phase:** execute
-**Started:** 2026-04-16
-**Status:** Wave 6 complete. All v1 tasks done. Ready for Phase 3 (Review).
+**Phase:** review (Phase 3)
+**Started:** 2026-04-16 (execute) → 2026-04-20 (review)
+**Status:** Waves 1–6 (v1) and Wave 7 (corpus-callosum v1.3 — OpenClaw-agent right hemisphere) all complete. tsc clean, 299/299 tests passing, +1 live continuity test green. PHI input scanner removed 2026-04-20 — PHI handling now lives in the Claude-team clinical pipeline (clinical archive + `CORPUS_CLINICAL_OVERRIDE`). Right-hemisphere agent is live behind `RIGHT_BRAIN_AGENT_ENABLED` with chat-completions fallback. Phase 3 (Review) opens against the v1 + v1.1 + v1.3 acceptance criteria.
 
 ## Progress
 | Wave | Task | Status | Retries | Notes |
@@ -36,7 +36,9 @@
 | 5 | T19: MCP server verification | complete | 0 | All 6 MCP servers available to CLI sessions (PubMed 7, ICD-10 6, CMS 8, Trials 6, Calendar 8, Gmail 2) |
 | 6 | T20: Simple message smoke tests | complete | 0 | 7 tests pass — identity, history, skills, network-status, frank-status |
 | 6 | T21: Lieutenant command tests | complete | 0 | SSH exec on Voldemort, file read on Pretoria |
-| 6 | T22: Security & error handling | complete | 0 | PHI scan (8 unit tests), history isolation, chat ID filtering |
+| 6 | T22: Security & error handling | complete | 0 | PHI scan (removed 2026-04-20 — handled by Claude-team clinical pipeline), history isolation, chat ID filtering |
+| 7 | Corpus-callosum v1.1 → v1.3 | complete | 0 | See corpus-callosum/.planning/STATE.md — Waves 1–7 all green |
+| — | PHI scanner removal | complete | 0 | scanText/scanner.ts + tests deleted, processor + route simplified, README updated. PHI handling delegated to Claude Team. |
 | 6 | T23: CLAUDE.md update | complete | 0 | Title, network table, skills, agents, paths, communication updated |
 
 ## Completed Phases
@@ -44,6 +46,7 @@
 |-------|------|-------|
 | spec | 2026-04-16 | Approved by Tripp — 5 v1 reqs, 4 v2, 10 ACs |
 | plan | 2026-04-16 | Approved by Tripp — 23 tasks, 6 waves, v1 scope |
+| execute | 2026-04-16 → 2026-04-20 | Waves 1–6 (v1) + Wave 7 (v1.3 right-brain agent) shipped. PHI scanner removed at exit. |
 
 ## Blockers
 - None
@@ -57,3 +60,4 @@
 | 2026-04-16 | Sequential message queue | Parallel Claude sessions too expensive and confusing. Process one at a time. |
 | 2026-04-16 | Lieutenants keep own brains | Each has specialized local tasks. Prime commands, doesn't replace. |
 | 2026-04-16 | Direct Telegram polling (bypass OpenClaw inbound) | OpenClaw has no hook/middleware system for message interception. Gateway is WebSocket, not REST. Cleanest v1: jarvis-prime polls Bot API directly, sends responses via Bot API. OpenClaw keeps cron, workspace, WhatsApp. Disable OpenClaw Telegram when jarvis-prime goes live. |
+| 2026-04-20 | Remove in-bridge PHI scanner | PHI is now handled out-of-band by the Claude-team clinical pipeline (`~/Documents/claude-team/clinical-archive/`) plus `CORPUS_CLINICAL_OVERRIDE`. Bridge-side regex was duplicating coverage and producing false-positive blocks on benign clinical-flavored prose. |
