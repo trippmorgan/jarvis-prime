@@ -1,11 +1,11 @@
 # Project State: Jarvis Prime — Unified Command Runtime
 
-> Last updated: 2026-04-20
+> Last updated: 2026-04-21
 
 ## Current Phase
-**Phase:** review (Phase 3)
-**Started:** 2026-04-16 (execute) → 2026-04-20 (review)
-**Status:** Waves 1–6 (v1) and Wave 7 (corpus-callosum v1.3 — OpenClaw-agent right hemisphere) all complete. tsc clean, 299/299 tests passing, +1 live continuity test green. PHI input scanner removed 2026-04-20 — PHI handling now lives in the Claude-team clinical pipeline (clinical archive + `CORPUS_CLINICAL_OVERRIDE`). Right-hemisphere agent is live behind `RIGHT_BRAIN_AGENT_ENABLED` with chat-completions fallback. Phase 3 (Review) opens against the v1 + v1.1 + v1.3 acceptance criteria.
+**Phase:** shipped — **v1.0 working model**
+**Started:** 2026-04-16 (execute) → 2026-04-20 (review) → 2026-04-21 (v1 ship, tag `v1.0.0`)
+**Status:** Waves 1–8 all complete. tsc clean, **468/469 tests passing** (1 skipped live-only). PHI input scanner removed 2026-04-20 — PHI handling now lives in the Claude-team clinical pipeline (clinical archive + `CORPUS_CLINICAL_OVERRIDE`). Right-hemisphere agent live behind `RIGHT_BRAIN_AGENT_ENABLED` with chat-completions fallback. Wave 8 brain-directed skill router shipped 2026-04-21 behind `JARVIS_ROUTER_ENABLED=true`. Spawner defaults flipped same-day: every Claude spawn gets `enableTools: true` + `enableSlashCommands: true` by default; opt-out is explicit and rare. Live Telegram smoke confirmed tools flow end-to-end (left hemisphere SSHes, skill shim executes dispatched skills).
 
 ## Progress
 | Wave | Task | Status | Retries | Notes |
@@ -40,6 +40,8 @@
 | 7 | Corpus-callosum v1.1 → v1.3 | complete | 0 | See corpus-callosum/.planning/STATE.md — Waves 1–7 all green |
 | — | PHI scanner removal | complete | 0 | scanText/scanner.ts + tests deleted, processor + route simplified, README updated. PHI handling delegated to Claude Team. |
 | 6 | T23: CLAUDE.md update | complete | 0 | Title, network table, skills, agents, paths, communication updated |
+| 8 | Brain-directed skill router (sub-waves 8.1–8.6) | complete | 0 | `<dispatch>` protocol, RightBrainSkillShim Path B, 1-retry self-correction, router E2E green (T15a–g). Flipped live 2026-04-21 behind `JARVIS_ROUTER_ENABLED=true`. |
+| — | Spawner tools-on default (post-W8 hotfix) | complete | 0 | `spawnClaude` `enableTools`/`enableSlashCommands` default → `true`. Dispatcher + shim + single-brain all get tools unless caller opts out. Commit `a62955e`. |
 
 ## Completed Phases
 | Phase | Date | Notes |
@@ -47,6 +49,7 @@
 | spec | 2026-04-16 | Approved by Tripp — 5 v1 reqs, 4 v2, 10 ACs |
 | plan | 2026-04-16 | Approved by Tripp — 23 tasks, 6 waves, v1 scope |
 | execute | 2026-04-16 → 2026-04-20 | Waves 1–6 (v1) + Wave 7 (v1.3 right-brain agent) shipped. PHI scanner removed at exit. |
+| ship v1 | 2026-04-21 | Wave 8 router flipped live, tools-on defaults flipped, Telegram smoke clean. Tagged `v1.0.0`. |
 
 ## Blockers
 - None
@@ -61,3 +64,5 @@
 | 2026-04-16 | Lieutenants keep own brains | Each has specialized local tasks. Prime commands, doesn't replace. |
 | 2026-04-16 | Direct Telegram polling (bypass OpenClaw inbound) | OpenClaw has no hook/middleware system for message interception. Gateway is WebSocket, not REST. Cleanest v1: jarvis-prime polls Bot API directly, sends responses via Bot API. OpenClaw keeps cron, workspace, WhatsApp. Disable OpenClaw Telegram when jarvis-prime goes live. |
 | 2026-04-20 | Remove in-bridge PHI scanner | PHI is now handled out-of-band by the Claude-team clinical pipeline (`~/Documents/claude-team/clinical-archive/`) plus `CORPUS_CLINICAL_OVERRIDE`. Bridge-side regex was duplicating coverage and producing false-positive blocks on benign clinical-flavored prose. |
+| 2026-04-21 | Flip `spawnClaude` defaults to tools-on | Dispatcher was spawning Claude without tools (carryover from the 240s left-hemisphere timeout fix), so the router kept hallucinating "no shell in this session" cards to Telegram. Policy now: every Claude spawn gets Bash/Read/Edit/slash by default. Opt-out is explicit (`enableTools: false`). Restrict later only when a concrete problem shows up. The right-brain agent's W7 8-file workspace sandbox is untouched — that's the PHI/credentials firewall. |
+| 2026-04-21 | Ship v1 | Waves 1–8 delivered end-to-end, live-tested over Telegram, router + tools-on confirmed working. Tagged `v1.0.0` on `main`. |
