@@ -42,6 +42,12 @@ const baseSchema = z.object({
   JARVIS_ROUTER_ENABLED: boolFromEnv(false),
   JARVIS_TIER0_ENABLED: boolFromEnv(false),
   JARVIS_TIER0_THRESHOLD: z.coerce.number().default(0.65),
+  LANGFUSE_ENABLED: boolFromEnv(false),
+  LANGFUSE_HOST: z.string().default(""),
+  LANGFUSE_PUBLIC_KEY: z.string().default(""),
+  LANGFUSE_SECRET_KEY: z.string().default(""),
+  LANGFUSE_FLUSH_AT: z.coerce.number().default(10),
+  LANGFUSE_FLUSH_INTERVAL_MS: z.coerce.number().default(5_000),
 });
 
 /**

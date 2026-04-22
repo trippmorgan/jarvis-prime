@@ -2,12 +2,20 @@ import { loadConfig } from "./config.js";
 import { buildServer } from "./server.js";
 
 const config = loadConfig();
-const { server, poller } = buildServer(config);
+const { server, poller, reporter } = await buildServer(config);
 
 const shutdown = async (signal: string) => {
   server.log.info({ signal }, "Shutting down");
   poller?.stop();
   await server.close();
+  // W8.8 — drain in-flight Langfuse traces before exit. NoopReporter
+  // resolves immediately when the feature is disabled.
+  await reporter.shutdown().catch((err) => {
+    server.log.warn(
+      { error: err instanceof Error ? err.message : String(err) },
+      "reporter shutdown threw — exiting anyway",
+    );
+  });
   process.exit(0);
 };
 

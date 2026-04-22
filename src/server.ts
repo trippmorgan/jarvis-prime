@@ -3,15 +3,32 @@ import type { Config } from "./config.js";
 import { MessageProcessor } from "./bridge/processor.js";
 import { registerMessageRoute } from "./routes/message.js";
 import { TelegramPoller } from "./telegram/poller.js";
+import { makeReporter, type Reporter } from "./observability/langfuse-reporter.js";
 
 export interface ServerContext {
   server: FastifyInstance
   processor: MessageProcessor
   poller: TelegramPoller | null
+  /** W8.8 — reporter handle so the shutdown sequence can drain traces. */
+  reporter: Reporter
 }
 
-export function buildServer(config: Config): ServerContext {
+export async function buildServer(config: Config): Promise<ServerContext> {
   const server = Fastify({ logger: true });
+
+  // W8.8 — construct the observability reporter first so we can pass it
+  // into the processor. NoopReporter is returned when LANGFUSE_ENABLED=false
+  // or when credentials are missing — the bridge never blocks on a remote
+  // tracing backend.
+  const reporter = await makeReporter({
+    enabled: config.LANGFUSE_ENABLED,
+    host: config.LANGFUSE_HOST,
+    publicKey: config.LANGFUSE_PUBLIC_KEY,
+    secretKey: config.LANGFUSE_SECRET_KEY,
+    flushAt: config.LANGFUSE_FLUSH_AT,
+    flushIntervalMs: config.LANGFUSE_FLUSH_INTERVAL_MS,
+    logger: server.log,
+  });
 
   const poller = config.TELEGRAM_BOT_TOKEN
     ? new TelegramPoller({
@@ -63,6 +80,7 @@ export function buildServer(config: Config): ServerContext {
       routerEnabled: config.JARVIS_ROUTER_ENABLED,
       tier0Enabled: config.JARVIS_TIER0_ENABLED,
       tier0Threshold: config.JARVIS_TIER0_THRESHOLD,
+      reporter,
       telegramSurface,
     },
     deliver,
@@ -82,5 +100,5 @@ export function buildServer(config: Config): ServerContext {
 
   registerMessageRoute(server, processor);
 
-  return { server, processor, poller };
+  return { server, processor, poller, reporter };
 }

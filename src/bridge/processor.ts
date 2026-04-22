@@ -16,6 +16,12 @@ import { RightHemisphereClient } from '../brain/right-hemisphere.js'
 import { makeRightClient } from '../brain/right-client-factory.js'
 import { Tier0Classifier, type Tier0Result } from '../brain/tier0-classifier.js'
 import {
+  NoopReporter,
+  type Reporter,
+  type TraceHandle,
+  CLINICAL_REDACTED_MARKER,
+} from '../observability/langfuse-reporter.js'
+import {
   LeftHemisphereError,
   RightHemisphereError,
   IntegrationError,
@@ -121,6 +127,12 @@ export interface ProcessorConfig {
    * `Tier0Classifier` when `tier0Enabled === true`.
    */
   tier0Classifier?: Tier0Classifier
+  /**
+   * W8.8 — observability reporter. When omitted, a `NoopReporter` is used
+   * and no traces are emitted. server.ts wires the real `LangfuseReporter`
+   * when `LANGFUSE_ENABLED=true` + credentials are set.
+   */
+  reporter?: Reporter
 }
 
 export class MessageProcessor {
@@ -133,6 +145,8 @@ export class MessageProcessor {
   private readonly orchestrator?: OrchestratorFn
   private readonly responder: TelegramResponder | null
   private readonly tier0Classifier: Tier0Classifier | null
+  private readonly reporter: Reporter
+  private readonly liveTraces: Map<string, TraceHandle> = new Map()
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
     this.config = config
@@ -197,6 +211,11 @@ export class MessageProcessor {
     } else {
       this.tier0Classifier = null
     }
+
+    // W8.8 — Reporter for Langfuse traces. server.ts injects a real
+    // LangfuseReporter when `LANGFUSE_ENABLED=true`; otherwise (and in
+    // tests) a NoopReporter satisfies the interface with zero overhead.
+    this.reporter = config.reporter ?? new NoopReporter()
 
     // Wave-6 evolving-message responder. Only constructed when both the
     // killswitch is on AND the surface is wired; otherwise we stay on the
@@ -277,6 +296,25 @@ export class MessageProcessor {
       'history user appended',
     )
 
+    // W8.8 — open a Langfuse root trace for this turn. NoopReporter when
+    // disabled, so this costs nothing in the dev/test path. Stored in the
+    // liveTraces map so emitProcessEnd can finalise it from any path
+    // handler without a signature-cascade refactor.
+    const isClinical = this.config.clinicalOverride === true
+    const trace = this.reporter.startTrace({
+      name: 'telegram_message',
+      sessionId: `chat_${msg.chatId}`,
+      userId: msg.userId,
+      input: isClinical ? CLINICAL_REDACTED_MARKER : msg.text,
+      metadata: {
+        messageId: msg.id,
+        queueLength: this.queue.getQueueLength(),
+        textLength: msg.text.length,
+      },
+      tags: ['inbound'],
+    })
+    this.liveTraces.set(msg.id, trace)
+
     const classification = classifyMessage({
       text: msg.text,
       userId: msg.userId,
@@ -326,6 +364,19 @@ export class MessageProcessor {
       !tier0Shortcut &&
       this.config.corpusCallosumEnabled &&
       this.orchestrator !== undefined
+
+    // Update trace with classification + tier-0 metadata before routing.
+    trace.update({
+      metadata: {
+        kind: classification.kind,
+        tier0Route: tier0?.route ?? null,
+        tier0Confidence: tier0?.confidence ?? null,
+        tier0TopRoute: tier0?.topRoute ?? null,
+        tier0TopCosine: tier0?.topCosine ?? null,
+        tier0LatencyMs: tier0?.latencyMs ?? null,
+        tier0Reason: tier0?.reason ?? null,
+      },
+    })
 
     if (useDualBrain) {
       this.log.info({ event: 'route_dual_brain', messageId: msg.id }, 'routing via dual-brain')
@@ -440,7 +491,7 @@ export class MessageProcessor {
       if (result.timedOut) {
         const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
-        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'legacy')
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'legacy', errorMsg)
         return errorMsg
       }
 
@@ -448,7 +499,7 @@ export class MessageProcessor {
         const errorMsg = `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`
         this.log.error({ exitCode: result.exitCode, stderrLength: result.stderr.length }, 'Claude CLI error')
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
-        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'legacy')
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'legacy', errorMsg)
         return errorMsg
       }
 
@@ -471,7 +522,7 @@ export class MessageProcessor {
         ackSent,
       }, 'Message processed')
 
-      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'legacy')
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'legacy', output)
 
       return output
     } catch (err) {
@@ -479,7 +530,7 @@ export class MessageProcessor {
       const errorMsg = `Internal error: ${err instanceof Error ? err.message : String(err)}`
       this.log.error({ messageId: msg.id, error: errorMsg }, 'Processing failed')
       await this.deliver(msg.chatId, errorMsg).catch(() => {})
-      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'legacy')
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'legacy', errorMsg)
       return errorMsg
     }
   }
@@ -538,7 +589,7 @@ export class MessageProcessor {
       if (result.timedOut) {
         const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
         await responder.finalize(msg.chatId, ackMessageId, errorMsg)
-        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'evolving')
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'evolving', errorMsg)
         return errorMsg
       }
 
@@ -546,7 +597,7 @@ export class MessageProcessor {
         const errorMsg = `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`
         this.log.error({ exitCode: result.exitCode, stderrLength: result.stderr.length }, 'Claude CLI error')
         await responder.finalize(msg.chatId, ackMessageId, errorMsg)
-        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'evolving')
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'evolving', errorMsg)
         return errorMsg
       }
 
@@ -568,14 +619,14 @@ export class MessageProcessor {
         outputLen: output.length,
       }, 'Message processed')
 
-      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'evolving')
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'evolving', output)
 
       return output
     } catch (err) {
       const errorMsg = `Internal error: ${err instanceof Error ? err.message : String(err)}`
       this.log.error({ messageId: msg.id, error: errorMsg }, 'Processing failed')
       await responder.finalize(msg.chatId, ackMessageId, errorMsg).catch(() => {})
-      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'evolving')
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'evolving', errorMsg)
       return errorMsg
     } finally {
       stopTyping()
@@ -669,7 +720,7 @@ export class MessageProcessor {
         'dual-brain processed',
       )
 
-      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'success', 'legacy')
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'success', 'legacy', output)
 
       return output
     } catch (err) {
@@ -684,7 +735,7 @@ export class MessageProcessor {
       } else {
         await this.deliver(msg.chatId, errorMsg).catch(() => {})
       }
-      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'error', 'legacy')
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'error', 'legacy', errorMsg)
       return errorMsg
     }
   }
@@ -825,7 +876,7 @@ export class MessageProcessor {
         'dual-brain processed',
       )
 
-      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'success', 'evolving')
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'success', 'evolving', output)
 
       return output
     } catch (err) {
@@ -835,7 +886,7 @@ export class MessageProcessor {
       } else {
         await responder.finalize(msg.chatId, ackMessageId, errorMsg).catch(() => {})
       }
-      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'error', 'evolving')
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'error', 'evolving', errorMsg)
       return errorMsg
     } finally {
       stopTyping()
@@ -922,18 +973,40 @@ export class MessageProcessor {
     path: 'single_brain' | 'dual_brain',
     outcome: 'success' | 'error' | 'timeout',
     uxPath: 'evolving' | 'legacy',
+    output?: string,
   ): void {
+    const totalPipelineMs = Date.now() - processStart
     this.log.info(
       {
         event: 'process_end',
         messageId,
-        totalPipelineMs: Date.now() - processStart,
+        totalPipelineMs,
         path,
         outcome,
         uxPath,
       },
       'process end',
     )
+
+    // W8.8 — finalise the Langfuse trace for this turn. Safe when reporter
+    // is a noop (handle's update/end are no-ops). Output is redacted on the
+    // clinical path; metadata always captured.
+    const trace = this.liveTraces.get(messageId)
+    if (trace) {
+      const isClinical = this.config.clinicalOverride === true
+      trace.update({
+        output:
+          output != null
+            ? isClinical
+              ? CLINICAL_REDACTED_MARKER
+              : output
+            : undefined,
+        metadata: { path, outcome, uxPath, totalPipelineMs },
+        tags: [path, outcome, uxPath],
+      })
+      trace.end()
+      this.liveTraces.delete(messageId)
+    }
   }
 
   /**
