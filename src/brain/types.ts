@@ -47,6 +47,14 @@ export interface HemisphereClient {
     system: string
     user: string
     timeoutMs: number
+    /**
+     * Pure-reasoning escape hatch for the left hemisphere's router-plan call:
+     * spawn Claude without the full tool surface so the planner produces a
+     * `<dispatch>` block in seconds instead of wandering with Bash/MCP/etc.
+     * The right hemisphere ignores this — its tool surface is gateway-side.
+     * Default: undefined → caller-default → tools-on.
+     */
+    enableTools?: boolean
   }): Promise<HemisphereCallResult>
 }
 

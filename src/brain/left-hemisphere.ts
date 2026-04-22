@@ -43,8 +43,9 @@ export class LeftHemisphereClient implements HemisphereClient {
     system: string;
     user: string;
     timeoutMs: number;
+    enableTools?: boolean;
   }): Promise<{ content: string; durationMs: number }> {
-    const { system, user, timeoutMs } = input;
+    const { system, user, timeoutMs, enableTools } = input;
     const prompt = `${system}\n\n${user}`;
     const start = Date.now();
 
@@ -54,6 +55,7 @@ export class LeftHemisphereClient implements HemisphereClient {
         hemisphere: "left",
         model: this.model,
         timeoutMs,
+        enableTools: enableTools ?? true,
       },
       "left hemisphere call starting",
     );
@@ -65,6 +67,7 @@ export class LeftHemisphereClient implements HemisphereClient {
         model: this.model,
         timeoutMs,
         workingDir: process.cwd(),
+        enableTools,
       });
     } catch (err) {
       const durationMs = Date.now() - start;

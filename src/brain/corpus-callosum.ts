@@ -215,6 +215,11 @@ export async function corpusCallosum(
       system: p1LeftPrompt.system,
       user: p1LeftPrompt.user,
       timeoutMs,
+      // Planner is a pure routing decision — no Bash, no MCP, no CLAUDE.md
+      // auto-load. Heavy investigation belongs in the dispatched skill shim
+      // (which keeps tools-on). Without this restriction, the planner can
+      // wander on heavy prompts and hit the 240s ceiling. (v1.0.1, 2026-04-21)
+      enableTools: false,
     })
 
     // Parse left's dispatch + tools evidence.
