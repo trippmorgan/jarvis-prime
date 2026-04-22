@@ -14,6 +14,7 @@ import { RightBrainSkillShim } from '../brain/right-brain-skill-shim.js'
 import { LeftHemisphereClient } from '../brain/left-hemisphere.js'
 import { RightHemisphereClient } from '../brain/right-hemisphere.js'
 import { makeRightClient } from '../brain/right-client-factory.js'
+import { Tier0Classifier, type Tier0Result } from '../brain/tier0-classifier.js'
 import {
   LeftHemisphereError,
   RightHemisphereError,
@@ -106,6 +107,20 @@ export interface ProcessorConfig {
    * Only consumed when routerEnabled=true.
    */
   skillShim?: SkillShim
+  /**
+   * W8.7 — enable the embedding-based Tier-0 intent classifier. When true and
+   * the classifier routes an incoming natural-language turn to `quick_q` with
+   * confidence ≥ `tier0Threshold`, the processor short-circuits to the single-
+   * brain Claude path instead of running the full corpus callosum. Default: false.
+   */
+  tier0Enabled?: boolean
+  /** Cosine threshold for the Tier-0 shortcut. Default 0.65. */
+  tier0Threshold?: number
+  /**
+   * Optional classifier injection (tests). Defaults to a lazily-loaded
+   * `Tier0Classifier` when `tier0Enabled === true`.
+   */
+  tier0Classifier?: Tier0Classifier
 }
 
 export class MessageProcessor {
@@ -117,6 +132,7 @@ export class MessageProcessor {
   private readonly promptBuilder: PromptBuilder
   private readonly orchestrator?: OrchestratorFn
   private readonly responder: TelegramResponder | null
+  private readonly tier0Classifier: Tier0Classifier | null
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
     this.config = config
@@ -166,6 +182,20 @@ export class MessageProcessor {
           { userMsg: input.userMsg, history: input.history },
         )
       }
+    }
+
+    // W8.7 — Tier-0 classifier. Only constructed when the feature flag is on
+    // AND the dual-brain is enabled (otherwise there's nothing to short-circuit
+    // past). Respects an injected instance for tests.
+    if (config.tier0Classifier) {
+      this.tier0Classifier = config.tier0Classifier
+    } else if (config.tier0Enabled === true && config.corpusCallosumEnabled) {
+      this.tier0Classifier = new Tier0Classifier({
+        threshold: config.tier0Threshold,
+        logger: this.log,
+      })
+    } else {
+      this.tier0Classifier = null
     }
 
     // Wave-6 evolving-message responder. Only constructed when both the
@@ -262,8 +292,38 @@ export class MessageProcessor {
       'classification',
     )
 
+    // W8.7 — Tier-0 embedding classifier. Only runs for natural-language
+    // turns where the dual-brain would otherwise fire. A `quick_q` winner
+    // short-circuits to the single-brain path; every other outcome (null,
+    // tool_call, dispatch, deep_review) falls through unchanged so W8.7 is
+    // purely additive.
+    let tier0: Tier0Result | null = null
+    if (
+      classification.kind === 'natural' &&
+      this.config.corpusCallosumEnabled &&
+      this.tier0Classifier !== null
+    ) {
+      tier0 = await this.tier0Classifier.classify(msg.text)
+      this.log.info(
+        {
+          event: 'tier0_classification',
+          messageId: msg.id,
+          route: tier0.route,
+          confidence: tier0.confidence,
+          topRoute: tier0.topRoute,
+          topCosine: tier0.topCosine,
+          latencyMs: tier0.latencyMs,
+          reason: tier0.reason,
+        },
+        'tier0 classification',
+      )
+    }
+
+    const tier0Shortcut = tier0?.route === 'quick_q'
+
     const useDualBrain =
       classification.kind === 'natural' &&
+      !tier0Shortcut &&
       this.config.corpusCallosumEnabled &&
       this.orchestrator !== undefined
 
@@ -272,11 +332,20 @@ export class MessageProcessor {
       return this.processDualBrain(msg, processStart)
     }
 
+    const singleBrainKind: OrchestratorKind = tier0Shortcut
+      ? 'tier0_quick'
+      : this.resolveSingleBrainKind(classification.kind)
+
     this.log.info(
-      { event: 'route_bypass', kind: classification.kind, messageId: msg.id },
+      {
+        event: 'route_bypass',
+        kind: classification.kind,
+        singleBrainKind,
+        tier0Shortcut,
+        messageId: msg.id,
+      },
       'routing via single-brain bypass',
     )
-    const singleBrainKind = this.resolveSingleBrainKind(classification.kind)
     return this.processSingleBrain(msg, processStart, singleBrainKind)
   }
 

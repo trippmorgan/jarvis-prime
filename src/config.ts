@@ -40,6 +40,8 @@ const baseSchema = z.object({
   RIGHT_BRAIN_AGENT_ENABLED: boolFromEnv(false),
   RIGHT_BRAIN_AGENT_FALLBACK: boolFromEnv(true),
   JARVIS_ROUTER_ENABLED: boolFromEnv(false),
+  JARVIS_TIER0_ENABLED: boolFromEnv(false),
+  JARVIS_TIER0_THRESHOLD: z.coerce.number().default(0.65),
 });
 
 /**

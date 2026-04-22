@@ -11,7 +11,12 @@
  * "Thinking…" label to hide single-brain complexity.
  */
 
-export type OrchestratorKind = 'natural' | 'slash' | 'clinical' | 'killswitch'
+export type OrchestratorKind =
+  | 'natural'
+  | 'slash'
+  | 'clinical'
+  | 'killswitch'
+  | 'tier0_quick'
 
 export const INITIAL_ACK_LABEL = 'Thinking…'
 
