@@ -61,6 +61,8 @@ export function buildServer(config: Config): ServerContext {
       rightBrainAgentEnabled: config.RIGHT_BRAIN_AGENT_ENABLED,
       rightBrainAgentFallback: config.RIGHT_BRAIN_AGENT_FALLBACK,
       routerEnabled: config.JARVIS_ROUTER_ENABLED,
+      tier0Enabled: config.JARVIS_TIER0_ENABLED,
+      tier0Threshold: config.JARVIS_TIER0_THRESHOLD,
       telegramSurface,
     },
     deliver,
