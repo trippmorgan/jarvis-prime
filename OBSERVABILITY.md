@@ -46,6 +46,18 @@ In the dashboard's Tracing tab:
 
 Token usage is **not currently captured**. Generations carry latency + model name only. Reason: Claude CLI doesn't return usage on stdout, and the OpenClaw gateway returns usage on the JSON envelope but `RightHemisphereClient` doesn't forward it through `HemisphereCallResult`. Adding usage is a 2-3 file change tracked as future polish.
 
+### Known issue — dual-brain phase timestamps (W8.8.3)
+
+The `dual_brain` span and its 5 child generations (`pass1_left`, `pass1_right`, `pass2_left`, `pass2_right`, `integration`) currently land in the dashboard with `startTime` and `endTime` collapsed to the wall-clock moment when `recordDualBrainTrace` runs (immediately after the orchestrator returns). Standalone tests of the wrapper produce correct retroactive timestamps (verified end-to-end with proper latencies), but the same code path inside the live processor produces 0-latency entries. Cause is under investigation — likely a Date-serialization quirk specific to the live-bridge module loading or batched flush ordering.
+
+What still works:
+- Per-generation `metadata.durationMs` carries the correct per-pass latency from the orchestrator's `result.trace`. Dashboard latency display is wrong but the underlying signal is in metadata.
+- The `tier0_classify` span uses live `new Date()` brackets and shows correct latency.
+- The root trace's `totalPipelineMs` metadata is accurate.
+- All trace shape (parent/child relationships, model names, output capture, redaction) is correct.
+
+For A/B baseline measurement (W8.9), use `metadata.durationMs` on each generation instead of the dashboard's latency column. The follow-up fix is tracked in the project notes — not a blocker for capturing the signal Wave 8.9 needs.
+
 ## Testing the pipeline
 
 ### Smoke test the trace pipeline (without sending a real Telegram message)
