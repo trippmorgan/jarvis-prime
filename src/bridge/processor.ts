@@ -341,7 +341,25 @@ export class MessageProcessor {
       this.config.corpusCallosumEnabled &&
       this.tier0Classifier !== null
     ) {
+      // W8.8.3 — bracket the classify call as a child span so its latency
+      // shows alongside the dual-brain spans in the trace timeline.
+      const tier0SpanStart = new Date()
+      const tier0Span = trace.startSpan({
+        name: 'tier0_classify',
+        startTime: tier0SpanStart,
+        metadata: { threshold: this.config.tier0Threshold ?? 0.65 },
+      })
       tier0 = await this.tier0Classifier.classify(msg.text)
+      tier0Span.end({
+        endTime: new Date(tier0SpanStart.getTime() + tier0.latencyMs),
+        output: { route: tier0.route, topRoute: tier0.topRoute },
+        metadata: {
+          confidence: tier0.confidence,
+          topCosine: tier0.topCosine,
+          latencyMs: tier0.latencyMs,
+          reason: tier0.reason,
+        },
+      })
       this.log.info(
         {
           event: 'tier0_classification',
@@ -467,10 +485,48 @@ export class MessageProcessor {
         'single-brain call start',
       )
 
+      // W8.8.3 — open a generation around the Claude spawn. Prompt + output
+      // are captured (clinical-redacted on the override path) so trace
+      // viewers can see what was sent and what came back.
+      const trace = this.liveTraces.get(msg.id)
+      const isClinical = this.config.clinicalOverride === true
+      const sbStart = new Date()
+      const sbGen = trace?.startGeneration({
+        name: 'single_brain_call',
+        model: this.config.claudeModel,
+        startTime: sbStart,
+        input: isClinical ? CLINICAL_REDACTED_MARKER : prompt,
+        metadata: { promptLength: prompt.length },
+      })
+
       const result = await spawnClaude(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
+      })
+
+      sbGen?.end({
+        endTime: new Date(sbStart.getTime() + result.durationMs),
+        output: isClinical
+          ? CLINICAL_REDACTED_MARKER
+          : result.output.slice(0, 4000),
+        level: result.timedOut
+          ? 'ERROR'
+          : result.exitCode !== 0
+            ? 'ERROR'
+            : 'DEFAULT',
+        statusMessage: result.timedOut
+          ? 'timeout'
+          : result.exitCode !== 0
+            ? `exit ${result.exitCode}`
+            : undefined,
+        metadata: {
+          durationMs: result.durationMs,
+          exitCode: result.exitCode,
+          outputLength: result.output.length,
+          stderrLength: result.stderr.length,
+          timedOut: result.timedOut,
+        },
       })
 
       this.log.info(
@@ -567,10 +623,46 @@ export class MessageProcessor {
         'single-brain call start',
       )
 
+      // W8.8.3 — generation around the spawn (evolving path).
+      const trace = this.liveTraces.get(msg.id)
+      const isClinical = this.config.clinicalOverride === true
+      const sbStart = new Date()
+      const sbGen = trace?.startGeneration({
+        name: 'single_brain_call',
+        model: this.config.claudeModel,
+        startTime: sbStart,
+        input: isClinical ? CLINICAL_REDACTED_MARKER : prompt,
+        metadata: { promptLength: prompt.length, ux: 'evolving' },
+      })
+
       const result = await spawnClaude(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
+      })
+
+      sbGen?.end({
+        endTime: new Date(sbStart.getTime() + result.durationMs),
+        output: isClinical
+          ? CLINICAL_REDACTED_MARKER
+          : result.output.slice(0, 4000),
+        level: result.timedOut
+          ? 'ERROR'
+          : result.exitCode !== 0
+            ? 'ERROR'
+            : 'DEFAULT',
+        statusMessage: result.timedOut
+          ? 'timeout'
+          : result.exitCode !== 0
+            ? `exit ${result.exitCode}`
+            : undefined,
+        metadata: {
+          durationMs: result.durationMs,
+          exitCode: result.exitCode,
+          outputLength: result.output.length,
+          stderrLength: result.stderr.length,
+          timedOut: result.timedOut,
+        },
       })
 
       this.log.info(
@@ -648,6 +740,130 @@ export class MessageProcessor {
     return this.processDualBrainLegacy(msg, processStart)
   }
 
+  /**
+   * W8.8.3 — Record a successful dual-brain run as a parent `dual_brain`
+   * span containing four per-pass generations (`pass1_left`, `pass1_right`,
+   * `pass2_left`, `pass2_right`) plus an `integration` generation on the
+   * supplied trace handle. Reads everything from the orchestrator's
+   * BrainResult so it never races with onEvent and never blocks the
+   * conversation path.
+   *
+   * Pass-2 draft text is captured (clinical-redacted under override).
+   * Pass-1 drafts are intentionally omitted — they're nearly identical to
+   * pass-2 in the legacy flow and not exposed to the UX, so storing them
+   * doubles the trace size without adding signal. Integration's output is
+   * the final user-facing answer (already on the root trace).
+   *
+   * Safe to call when `trace` is undefined (NoopReporter case) — exits
+   * immediately. Wrapped in a try/catch so observability errors never
+   * affect the user-facing reply.
+   */
+  private recordDualBrainTrace(
+    trace: TraceHandle | undefined,
+    result: BrainResult,
+    isClinical: boolean,
+  ): void {
+    if (!trace) return
+    try {
+      const t = result.trace
+      const totalMs = t.totalMs
+      const dualEnd = new Date()
+      const dualStart = new Date(dualEnd.getTime() - totalMs)
+      const dualSpan = trace.startSpan({
+        name: 'dual_brain',
+        startTime: dualStart,
+        metadata: {
+          totalMs,
+          integrationMs: t.integrationMs,
+          leftToolsCount: t.leftToolsUsed?.length ?? 0,
+          rightToolsCount: t.rightToolsUsed?.length ?? 0,
+        },
+      })
+
+      // Reconstruct pass timing from the orchestrator's per-pass durations.
+      // Walk backward from `dualEnd`: integration → pass2 → pass1.
+      const integrationEnd = dualEnd
+      const integrationStart = new Date(
+        integrationEnd.getTime() - t.integrationMs,
+      )
+      const pass2End = integrationStart
+      const pass2Ms = Math.max(t.p2Left.durationMs, t.p2Right.durationMs)
+      const pass2Start = new Date(pass2End.getTime() - pass2Ms)
+      const pass1End = pass2Start
+      const pass1Ms = Math.max(t.p1Left.durationMs, t.p1Right.durationMs)
+      const pass1Start = new Date(pass1End.getTime() - pass1Ms)
+
+      const redact = (s: string): string =>
+        isClinical ? CLINICAL_REDACTED_MARKER : s.slice(0, 4000)
+
+      const p1Left = trace.startGeneration({
+        name: 'pass1_left',
+        model: this.config.claudeModel,
+        startTime: new Date(pass1End.getTime() - t.p1Left.durationMs),
+        metadata: {
+          hemisphere: 'left',
+          pass: 1,
+          durationMs: t.p1Left.durationMs,
+        },
+      })
+      p1Left.end({ endTime: pass1End })
+
+      const p1Right = trace.startGeneration({
+        name: 'pass1_right',
+        model: this.config.rightModel,
+        startTime: new Date(pass1End.getTime() - t.p1Right.durationMs),
+        metadata: {
+          hemisphere: 'right',
+          pass: 1,
+          durationMs: t.p1Right.durationMs,
+        },
+      })
+      p1Right.end({ endTime: pass1End })
+
+      const p2Left = trace.startGeneration({
+        name: 'pass2_left',
+        model: this.config.claudeModel,
+        startTime: new Date(pass2End.getTime() - t.p2Left.durationMs),
+        metadata: {
+          hemisphere: 'left',
+          pass: 2,
+          durationMs: t.p2Left.durationMs,
+        },
+      })
+      p2Left.end({
+        endTime: pass2End,
+        output: redact(t.p2Left.content),
+      })
+
+      const p2Right = trace.startGeneration({
+        name: 'pass2_right',
+        model: this.config.rightModel,
+        startTime: new Date(pass2End.getTime() - t.p2Right.durationMs),
+        metadata: {
+          hemisphere: 'right',
+          pass: 2,
+          durationMs: t.p2Right.durationMs,
+        },
+      })
+      p2Right.end({
+        endTime: pass2End,
+        output: redact(t.p2Right.content),
+      })
+
+      const integration = trace.startGeneration({
+        name: 'integration',
+        model: this.config.claudeModel,
+        startTime: integrationStart,
+        metadata: { hemisphere: 'left', durationMs: t.integrationMs },
+      })
+      integration.end({ endTime: integrationEnd })
+
+      dualSpan.end({ endTime: dualEnd })
+    } catch {
+      // Tracing must never break message processing.
+    }
+  }
+
   private async processDualBrainLegacy(msg: QueueMessage, processStart: number): Promise<string> {
     let ackSent = false
     const ackTimer = setTimeout(async () => {
@@ -695,6 +911,14 @@ export class MessageProcessor {
       })
 
       clearTimeout(ackTimer)
+
+      // W8.8.3 — record per-pass spans/generations now that we have the full
+      // trace from the orchestrator. NoopReporter case is a fast no-op.
+      this.recordDualBrainTrace(
+        this.liveTraces.get(msg.id),
+        result,
+        this.config.clinicalOverride === true,
+      )
 
       const output = result.finalText.trim() || '(No output)'
       this.history.append('assistant', result.finalText)
@@ -842,6 +1066,13 @@ export class MessageProcessor {
         chatId: msg.chatId,
         onEvent,
       })
+
+      // W8.8.3 — record per-pass spans/generations from result.trace.
+      this.recordDualBrainTrace(
+        this.liveTraces.get(msg.id),
+        result,
+        this.config.clinicalOverride === true,
+      )
 
       const output = result.finalText.trim() || '(No output)'
       this.history.append('assistant', result.finalText)

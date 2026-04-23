@@ -100,5 +100,141 @@ describe("LangfuseReporter (via injected fake client)", () => {
     const noop = new NoopReporter().startTrace()
     expect(typeof noop.update).toBe("function")
     expect(typeof noop.end).toBe("function")
+    expect(typeof noop.startSpan).toBe("function")
+    expect(typeof noop.startGeneration).toBe("function")
+  })
+})
+
+describe("W8.8.3 — span + generation primitives (NoopReporter)", () => {
+  it("noop trace.startSpan returns safe handle", () => {
+    const t = new NoopReporter().startTrace()
+    const s = t.startSpan({ name: "phase" })
+    expect(() => s.update({ metadata: { x: 1 } })).not.toThrow()
+    expect(() => s.end({ output: "done", level: "DEFAULT" })).not.toThrow()
+    expect(() => s.end()).not.toThrow() // safe to double-end
+  })
+
+  it("noop trace.startGeneration returns safe handle", () => {
+    const t = new NoopReporter().startTrace()
+    const g = t.startGeneration({ name: "call", model: "sonnet" })
+    expect(() => g.update({ output: "partial" })).not.toThrow()
+    expect(() =>
+      g.end({
+        output: "final",
+        usage: { promptTokens: 10, completionTokens: 5 },
+        level: "DEFAULT",
+      }),
+    ).not.toThrow()
+  })
+})
+
+describe("W8.8.3 — LangfuseReporter span + generation wrapping", () => {
+  // Mirrors the wrapper logic against a hand-rolled fake. We don't import
+  // the real Langfuse SDK — keep tests offline.
+  function makeFakeTraceClient() {
+    const events: { kind: string; init?: unknown; end?: unknown; update?: unknown }[] = []
+    const obs = (kind: string) => ({
+      update: (u: unknown) => events.push({ kind: `${kind}:update`, update: u }),
+      end: (e?: unknown) => events.push({ kind: `${kind}:end`, end: e }),
+    })
+    const trace = {
+      update: (u: unknown) => events.push({ kind: "trace:update", update: u }),
+      span: (init: unknown) => {
+        events.push({ kind: "span:start", init })
+        return obs("span")
+      },
+      generation: (init: unknown) => {
+        events.push({ kind: "gen:start", init })
+        return obs("gen")
+      },
+    }
+    const client = {
+      trace: () => trace,
+      shutdownAsync: vi.fn().mockResolvedValue(undefined),
+    }
+    return { client, trace, events }
+  }
+
+  it("startSpan / end forwards to client.span() and obs.end()", async () => {
+    const { client, events } = makeFakeTraceClient()
+    const { LangfuseReporter } = await import(
+      "../observability/langfuse-reporter.js"
+    ).then(async () => {
+      // re-import the module so we pick the class via internal constructor;
+      // since LangfuseReporter is not exported, build a thin reporter via
+      // makeReporter pattern: just satisfy via the shape used by tests.
+      return import("../observability/langfuse-reporter.js")
+    })
+    void LangfuseReporter // silence unused
+    // We can't construct LangfuseReporter directly (private); exercise it
+    // by stubbing a Langfuse import inside makeReporter.
+    const { makeReporter } = await import("../observability/langfuse-reporter.js")
+    // Inject the fake by mocking the dynamic import:
+    vi.doMock("langfuse", () => ({ Langfuse: function () { return client } }))
+    const reporter = await makeReporter({
+      enabled: true,
+      host: "http://x",
+      publicKey: "pk-x",
+      secretKey: "sk-x",
+    })
+    vi.doUnmock("langfuse")
+    const trace = reporter.startTrace({ name: "t", sessionId: "s" })
+    const span = trace.startSpan({ name: "phase", metadata: { p: 1 } })
+    span.update({ metadata: { extra: 2 } })
+    span.end({ output: "ok", level: "DEFAULT" })
+    expect(events.find((e) => e.kind === "span:start")).toBeDefined()
+    // Wrapper routes both .update() and .end() through the SDK's update()
+    // (since SDK's end() clobbers endTime). We expect at least 2 update calls
+    // and the last one to carry an endTime.
+    const spanUpdates = events.filter((e) => e.kind === "span:update")
+    expect(spanUpdates.length).toBe(2)
+    const lastUpdate = spanUpdates[spanUpdates.length - 1]
+    expect((lastUpdate.update as Record<string, unknown>).endTime).toBeDefined()
+  })
+
+  it("startGeneration / end forwards to client.generation() and obs.end()", async () => {
+    const { client, events } = makeFakeTraceClient()
+    vi.doMock("langfuse", () => ({ Langfuse: function () { return client } }))
+    const { makeReporter } = await import("../observability/langfuse-reporter.js")
+    const reporter = await makeReporter({
+      enabled: true,
+      host: "http://x",
+      publicKey: "pk-x",
+      secretKey: "sk-x",
+    })
+    vi.doUnmock("langfuse")
+    const trace = reporter.startTrace({ name: "t", sessionId: "s" })
+    const gen = trace.startGeneration({ name: "call", model: "sonnet" })
+    gen.update({ output: "partial" })
+    gen.end({
+      output: "final",
+      usage: { promptTokens: 10, completionTokens: 5 },
+    })
+    expect(events.find((e) => e.kind === "gen:start")).toBeDefined()
+    const genUpdates = events.filter((e) => e.kind === "gen:update")
+    expect(genUpdates.length).toBe(2)
+    const lastUpdate = genUpdates[genUpdates.length - 1]
+    expect((lastUpdate.update as Record<string, unknown>).endTime).toBeDefined()
+    expect((lastUpdate.update as Record<string, unknown>).output).toBe("final")
+  })
+
+  it("span.end is idempotent — second call is a no-op", async () => {
+    const { client, events } = makeFakeTraceClient()
+    vi.doMock("langfuse", () => ({ Langfuse: function () { return client } }))
+    const { makeReporter } = await import("../observability/langfuse-reporter.js")
+    const reporter = await makeReporter({
+      enabled: true,
+      host: "http://x",
+      publicKey: "pk-x",
+      secretKey: "sk-x",
+    })
+    vi.doUnmock("langfuse")
+    const trace = reporter.startTrace({ name: "t", sessionId: "s" })
+    const span = trace.startSpan({ name: "phase" })
+    span.end()
+    span.end()
+    // .end() routes through update() now — second call must be a no-op.
+    const updates = events.filter((e) => e.kind === "span:update")
+    expect(updates.length).toBe(1)
   })
 })

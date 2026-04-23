@@ -8,7 +8,11 @@ Jarvis Prime is the central brain for the Jarvis network. It bridges Telegram wi
 **v1.3 — OpenClaw-agent right hemisphere** (Wave 7, complete 2026-04-20). Right hemisphere can be served by a persistent `right-brain` OpenClaw agent with per-chat session memory, behind `RIGHT_BRAIN_AGENT_ENABLED`. Transport failures auto-fallback to the chat-completions client when `RIGHT_BRAIN_AGENT_FALLBACK=true`. Workspace allowlist enforces an 8-file view; credentials never in scope. PHI handling is delegated to the Claude-team clinical pipeline (clinical archive + `CORPUS_CLINICAL_OVERRIDE`).
 **v1.4 — Brain-directed skill router** (Wave 8, shipped live 2026-04-21). Left hemisphere plans in a `<dispatch>` block, choosing skill / research / tool modes; skill dispatches run the methodology via `RightBrainSkillShim` (Path B — jarvis-prime spawns a full-tool Claude CLI, feeds the result back into right's pass-1 as `<skill-evidence>`). Bounded 1-retry self-correction. Router lives behind `JARVIS_ROUTER_ENABLED=true`. Same-day hotfix flipped `spawnClaude` defaults to `enableTools: true` / `enableSlashCommands: true` so the dispatcher and shim both get the full tool surface by default.
 
-**Status (v1.0.0, 2026-04-21 ship):** 468/469 tests passing (1 live-only skipped by default), `tsc --noEmit` clean, live Telegram smoke green (left SSHes real nodes; skill dispatch executes real tools). Tagged `v1.0.0` on `main`.
+**v1.5 — Tier-0 quick-question short-circuit** (Wave 8.7, live 2026-04-22). An in-process embedding classifier (`@xenova/transformers`, all-MiniLM-L6-v2) runs against every natural-language turn before dual-brain. High-confidence `quick_q` matches bypass the full corpus callosum and route to single-brain Claude — fast lane for "good morning" / "thanks" / "what time is it" style messages. Threshold + flag: `JARVIS_TIER0_ENABLED=true`, `JARVIS_TIER0_THRESHOLD=0.65`. Other classifications (`tool_call`, `dispatch`, `deep_review`, null) fall through unchanged so the wave is purely additive.
+
+**v1.6 — Langfuse observability spine** (Wave 8.8 / 8.8.3, live 2026-04-22). Every Telegram turn opens a root trace (`telegram_message`) finalised with classification kind, tier-0 metadata, path, outcome, and the final response (clinical-redacted under override). Per-phase spans (`tier0_classify`, `dual_brain`) and per-hemisphere generations (`pass1_left`, `pass1_right`, `pass2_left`, `pass2_right`, `integration`, `single_brain_call`) attach to the trace with model name, latency, and pass-2 draft text. Self-hosted on SuperServer at `http://100.80.111.84:3200` (Tailscale-only). Reporter is a thin wrapper around the Langfuse SDK and degrades to a `NoopReporter` when `LANGFUSE_ENABLED=false` or credentials are missing — observability never blocks the conversation path. See [OBSERVABILITY.md](./OBSERVABILITY.md) for dashboard access, query recipes, and PHI policy.
+
+**Status (current, 2026-04-22):** 507/508 tests passing (1 live-only skipped by default), `tsc --noEmit` clean. Bridge live with `JARVIS_TIER0_ENABLED=true` and `LANGFUSE_ENABLED=true`. Tagged `v1.0.0` on `main` (2026-04-21 ship); waves 8.7 + 8.8 + 8.8.3 land on top of the tag.
 
 ## How Tripp Uses Me
 
@@ -119,8 +123,10 @@ src/
 ├── server.ts                   Fastify factory; wires dual-brain config into MessageProcessor
 ├── bridge/
 │   └── processor.ts            queue → classify → single-brain OR dual-brain → deliver
-├── brain/                      Corpus callosum (Waves 1-3 + W7)
+├── brain/                      Corpus callosum (Waves 1-3 + W7-8.7)
 │   ├── router.ts               classifyMessage() — slash/clinical/natural classifier
+│   ├── tier0-classifier.ts     W8.7 — embedding-based quick_q short-circuit
+│   ├── tier0-seeds.ts          W8.7 — 4 buckets × 30 utterances seed corpus
 │   ├── affordance.ts           left/right pass-1 + pass-2 prompt builders
 │   ├── integration.ts          integrationPrompt() — Claude silent-merge final call
 │   ├── left-hemisphere.ts      LeftHemisphereClient — wraps spawnClaude behind HemisphereClient
@@ -128,9 +134,17 @@ src/
 │   ├── right-brain-agent.ts    RightBrainAgentClient (W7) — shells `openclaw agent --session-id <deterministic>`
 │   ├── fallback-right-client.ts FallbackRightClient (W7) — retries once on transport error
 │   ├── right-client-factory.ts makeRightClient() (W7) — picks client based on flags + chatId
+│   ├── right-brain-skill-shim.ts W8 — spawns full-tool Claude CLI for skill dispatches
+│   ├── dispatch-parser.ts      W8 — parse left's `<dispatch>` + `<tools>` blocks
+│   ├── dispatch-types.ts       W8 — Dispatch, ToolEvidence types
+│   ├── skill-registry.ts       W8 — ALLOWED_SKILLS allowlist
+│   ├── right-prompts.ts        W8 — buildRightPass1Prompt for skill/research mode
+│   ├── phase-labels.ts         W6/W8 — phase-label map for evolving UX
 │   ├── sessionId.ts            deriveRightBrainSessionId() (W7) — sha256(chatId)[:16]
 │   ├── corpus-callosum.ts      Orchestrator — p1 parallel, p2 exchange, integration w/ one retry
 │   └── types.ts                HemisphereClient, CallosumTrace, BrainResult, error classes
+├── observability/              W8.8 — Langfuse trace reporter
+│   └── langfuse-reporter.ts    Reporter / TraceHandle / SpanHandle / GenerationHandle interfaces; LangfuseReporter wrapper; NoopReporter fallback
 ├── claude/
 │   ├── spawner.ts              child_process → `claude --print` with timeout + SIGKILL
 │   └── types.ts                SpawnOptions, SpawnResult
@@ -153,7 +167,7 @@ src/
 │   └── types.ts                SshResult, NodeConfig, NODES registry
 ├── telegram/
 │   └── poller.ts               Bot API getUpdates long-poll, 409 backoff, sendMessage
-└── __tests__/                  26 test files, 299 tests (+1 live-only, skipped by default)
+└── __tests__/                  35 test files, 507 tests (+1 live-only, skipped by default)
 ```
 
 ## Environment Variables
@@ -175,6 +189,15 @@ src/
 | `JARVIS_EVOLVING_MESSAGE_ENABLED` | true | Wave 6 evolving-bubble UX with phase labels + typing heartbeat. `false` → legacy ack-then-final |
 | `RIGHT_BRAIN_AGENT_ENABLED` | false | Wave 7 — serve the right hemisphere via the persistent `right-brain` OpenClaw agent (per-chat session memory). `false` → stateless `/v1/chat/completions` (Wave 5/6 path) |
 | `RIGHT_BRAIN_AGENT_FALLBACK` | true | When the agent throws a transport error, retry once on the chat-completions client. Model errors never fall back |
+| `JARVIS_ROUTER_ENABLED` | false | Wave 8 — brain-directed skill router (left plans `<dispatch>`, right drafts with skill evidence). Live default in v1.4 deploys. |
+| `JARVIS_TIER0_ENABLED` | false | Wave 8.7 — Tier-0 embedding classifier short-circuit. When on, `quick_q` matches bypass dual-brain. Currently **live (true)**. |
+| `JARVIS_TIER0_THRESHOLD` | 0.65 | Cosine cutoff for accepting a Tier-0 route. Lower = more eager shortcut. |
+| `LANGFUSE_ENABLED` | false | Wave 8.8 — emit a root trace per Telegram turn to the configured Langfuse host. Currently **live (true)**. |
+| `LANGFUSE_HOST` | `http://100.80.111.84:3200` | Self-hosted Langfuse base URL (Tailscale-only). |
+| `LANGFUSE_PUBLIC_KEY` | — | `pk-lf-...` from `workspace/langfuse/.env`. **Required** when `LANGFUSE_ENABLED=true`. |
+| `LANGFUSE_SECRET_KEY` | — | `sk-lf-...` from `workspace/langfuse/.env`. **Required** when `LANGFUSE_ENABLED=true`. |
+| `LANGFUSE_FLUSH_AT` | 10 | Batch size for the SDK's background flush. |
+| `LANGFUSE_FLUSH_INTERVAL_MS` | 5000 | Max time between background flushes (ms). |
 | `WORKSPACE_DIR` | `~/.openclaw/workspace` | OpenClaw workspace root |
 | `DELIVERY_QUEUE_DIR` | `~/.openclaw/delivery-queue` | Spool dir for failed deliveries |
 
