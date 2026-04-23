@@ -203,6 +203,9 @@ function makeRouterProcessor(opts: {
       routerEnabled: true,
       skillShim: opts.skillShim,
       orchestrator,
+      // W8.7.1 — short-message fast lane off in router E2Es so short test
+      // messages reach the orchestrator under test.
+      shortMessageFastLaneEnabled: false,
     },
     deliverMock,
     log,

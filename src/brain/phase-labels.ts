@@ -17,6 +17,7 @@ export type OrchestratorKind =
   | 'clinical'
   | 'killswitch'
   | 'tier0_quick'
+  | 'short_msg_fast_lane'
 
 export const INITIAL_ACK_LABEL = 'Thinking…'
 

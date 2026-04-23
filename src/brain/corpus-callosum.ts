@@ -189,6 +189,7 @@ export async function corpusCallosum(
   )
 
   // --- Pass 1 ----------------------------------------------------------------
+  const pass1PhaseStart = Date.now()
   let p1LeftResult: { content: string; durationMs: number }
   let p1RightResult: { content: string; durationMs: number }
   let leftToolsUsed: ToolEvidence[] | undefined
@@ -358,16 +359,20 @@ export async function corpusCallosum(
     ])
   }
 
+  const pass1WallMs = Date.now() - pass1PhaseStart
+
   logger?.info(
     {
       event: "callosum_pass1_ok",
       leftMs: p1LeftResult.durationMs,
       rightMs: p1RightResult.durationMs,
+      pass1WallMs,
     },
     "pass 1 ok",
   )
 
   // --- Pass 2 — revision exchange (parallel) -------------------------------
+  const pass2PhaseStart = Date.now()
   logger?.info({ event: "callosum_pass2_start" }, "pass 2 start")
   emit("callosum_pass2_start")
 
@@ -393,11 +398,14 @@ export async function corpusCallosum(
     right.call({ system: p2RightPrompt.system, user: p2RightPrompt.user, timeoutMs }),
   ])
 
+  const pass2WallMs = Date.now() - pass2PhaseStart
+
   logger?.info(
     {
       event: "callosum_pass2_ok",
       leftMs: p2LeftResult.durationMs,
       rightMs: p2RightResult.durationMs,
+      pass2WallMs,
     },
     "pass 2 ok",
   )
@@ -579,6 +587,8 @@ export async function corpusCallosum(
       },
       integrationMs,
       totalMs,
+      pass1WallMs,
+      pass2WallMs,
       leftToolsUsed,
     },
   }

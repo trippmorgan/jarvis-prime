@@ -66,6 +66,13 @@ export interface CallosumTrace {
   p2Right: HemisphereDraft
   integrationMs: number
   totalMs: number
+  /** Actual wall-clock time for the full pass-1 phase. Router path is sequential
+   * (left → skill → right) so this is much larger than max(p1L, p1R).
+   * Optional for backward-compat; processor falls back to max(p1L, p1R) when absent. */
+  pass1WallMs?: number
+  /** Actual wall-clock time for the full pass-2 phase (always parallel).
+   * Optional for backward-compat; processor falls back to max(p2L, p2R) when absent. */
+  pass2WallMs?: number
   /** Tools used by the left hemisphere during its pass-1 (router mode only). */
   leftToolsUsed?: ToolEvidence[]
   /** Tools used by the right hemisphere during its pass-1 (router mode only). */

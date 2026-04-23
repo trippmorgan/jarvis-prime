@@ -62,7 +62,12 @@ export interface Tier0Config {
   encoderFactory?: () => Promise<FeatureExtractor>
 }
 
-const DEFAULT_THRESHOLD = 0.65
+// W8.7.1 — dropped from 0.65 → 0.50 after live observation that real chitchat
+// ("good morning jarvis" cosine 0.595) was falling through to the 190-second
+// dual-brain pipeline. Lower threshold catches more of the common case at the
+// cost of occasional misroutes (which are forgiven — single-brain handles them
+// fine, just without the deep deliberation).
+const DEFAULT_THRESHOLD = 0.5
 const DEFAULT_CACHE_DIR = "/home/tripp/.openclaw/workspace/jarvis-prime/.data/xenova-cache"
 const MODEL_ID = "Xenova/all-MiniLM-L6-v2"
 

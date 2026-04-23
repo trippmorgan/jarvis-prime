@@ -41,7 +41,14 @@ const baseSchema = z.object({
   RIGHT_BRAIN_AGENT_FALLBACK: boolFromEnv(true),
   JARVIS_ROUTER_ENABLED: boolFromEnv(false),
   JARVIS_TIER0_ENABLED: boolFromEnv(false),
-  JARVIS_TIER0_THRESHOLD: z.coerce.number().default(0.65),
+  // W8.7.1 — default tightened from 0.65 → 0.50. Live "good morning jarvis"
+  // scored 0.595 cosine and missed the old threshold; 0.50 catches more of
+  // the common chitchat without bringing in too many tool-call false matches.
+  JARVIS_TIER0_THRESHOLD: z.coerce.number().default(0.5),
+  // W8.7.1 — short-message fast lane killswitch + length cap. Defaults: on,
+  // 80 chars. Set JARVIS_SHORT_MSG_FAST_LANE=false to disable.
+  JARVIS_SHORT_MSG_FAST_LANE: boolFromEnv(true),
+  JARVIS_SHORT_MSG_MAX_CHARS: z.coerce.number().default(80),
   LANGFUSE_ENABLED: boolFromEnv(false),
   LANGFUSE_HOST: z.string().default(""),
   LANGFUSE_PUBLIC_KEY: z.string().default(""),

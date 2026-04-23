@@ -57,6 +57,8 @@ function makeProcessor(opts: {
   tier0Enabled?: boolean
   tier0Classifier?: Tier0Classifier
   reporter?: Reporter
+  shortMessageFastLaneEnabled?: boolean
+  shortMessageMaxChars?: number
 }) {
   const tmpDir = mkdtempSync(join(tmpdir(), 'jp-test-'))
   const historyPath = opts.historyPath ?? join(tmpDir, 'history.jsonl')
@@ -82,6 +84,10 @@ function makeProcessor(opts: {
       tier0Enabled: opts.tier0Enabled,
       tier0Classifier: opts.tier0Classifier,
       reporter: opts.reporter,
+      // W8.7.1 — tests opt-in explicitly; default off preserves pre-W8.7.1
+      // dual-brain exercise semantics for the bulk of the suite.
+      shortMessageFastLaneEnabled: opts.shortMessageFastLaneEnabled ?? false,
+      shortMessageMaxChars: opts.shortMessageMaxChars,
     },
     deliverMock,
     log,
@@ -541,7 +547,7 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       corpusCallosumEnabled: true,
       orchestrator,
       tier0Enabled: true,
-      tier0Classifier: makeTestTier0(),
+      tier0Classifier: makeTestTier0(), shortMessageFastLaneEnabled: false,
     })
 
     processor.submit('123', 'alpha three quick hello', 'user1')
@@ -562,7 +568,7 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       corpusCallosumEnabled: true,
       orchestrator,
       tier0Enabled: true,
-      tier0Classifier: makeTestTier0(),
+      tier0Classifier: makeTestTier0(), shortMessageFastLaneEnabled: false,
     })
 
     processor.submit('123', 'delta tradeoff analysis', 'user1')
@@ -583,7 +589,7 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       corpusCallosumEnabled: true,
       orchestrator,
       tier0Enabled: true,
-      tier0Classifier: makeTestTier0(),
+      tier0Classifier: makeTestTier0(), shortMessageFastLaneEnabled: false,
     })
 
     // Text starting with Z → weak vector → cos ~0.1 with every basis → below 0.65
@@ -605,7 +611,7 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       corpusCallosumEnabled: true,
       orchestrator,
       // tier0Enabled: undefined (default false)
-      tier0Classifier: makeTestTier0(),
+      tier0Classifier: makeTestTier0(), shortMessageFastLaneEnabled: false,
     })
 
     processor.submit('123', 'alpha three quick hello', 'user1')
@@ -632,7 +638,7 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       corpusCallosumEnabled: true,
       orchestrator,
       tier0Enabled: true,
-      tier0Classifier: classifier,
+      tier0Classifier: classifier, shortMessageFastLaneEnabled: false,
     })
 
     processor.submit('123', '/toggle status', 'user1')
@@ -656,7 +662,7 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       clinicalOverride: true,
       orchestrator,
       tier0Enabled: true,
-      tier0Classifier: classifier,
+      tier0Classifier: classifier, shortMessageFastLaneEnabled: false,
     })
 
     processor.submit('123', 'alpha three quick hello', 'user1')
@@ -665,6 +671,141 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
     expect(classifySpy).not.toHaveBeenCalled()
     expect(orchestrator).not.toHaveBeenCalled()
     expect(spawnClaude).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MessageProcessor — short-message fast lane (Wave 8.7.1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('short statement skips dual-brain AND tier-0 classifier', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'short reply', stderr: '', exitCode: 0, durationMs: 50, timedOut: false,
+    })
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'should not run',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    // Spy: if tier-0 runs, `.classify` gets called. It shouldn't.
+    const classifySpy = vi.fn()
+    const fakeTier0 = { classify: classifySpy } as unknown as Tier0Classifier
+
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      tier0Enabled: true,
+      tier0Classifier: fakeTier0,
+      shortMessageFastLaneEnabled: true,
+    })
+
+    processor.submit('chat-sm', 'ok sounds good', 'user-sm')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(spawnClaude).toHaveBeenCalledTimes(1)
+    expect(orchestrator).not.toHaveBeenCalled()
+    expect(classifySpy).not.toHaveBeenCalled()
+    expect(deliverMock).toHaveBeenCalledWith('chat-sm', 'short reply')
+  })
+
+  it('message with "?" does NOT fast-lane — falls through to tier-0/dual-brain', async () => {
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'deep answer',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      shortMessageFastLaneEnabled: true,
+    })
+
+    processor.submit('chat-q', 'how are you?', 'user-q')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(orchestrator).toHaveBeenCalledTimes(1)
+    expect(spawnClaude).not.toHaveBeenCalled()
+  })
+
+  it('long message does NOT fast-lane', async () => {
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'deep answer',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      shortMessageFastLaneEnabled: true,
+    })
+
+    processor.submit('chat-l', 'a'.repeat(200), 'user-l')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(orchestrator).toHaveBeenCalledTimes(1)
+  })
+
+  it('killswitch shortMessageFastLaneEnabled=false disables the lane', async () => {
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'deep answer',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      shortMessageFastLaneEnabled: false,
+    })
+
+    processor.submit('chat-off', 'ok sounds good', 'user-off')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(orchestrator).toHaveBeenCalledTimes(1)
+    expect(spawnClaude).not.toHaveBeenCalled()
+  })
+
+  it('custom shortMessageMaxChars clips the lane', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'sb', stderr: '', exitCode: 0, durationMs: 10, timedOut: false,
+    })
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'deep', trace: MOCK_TRACE,
+    } satisfies BrainResult)
+
+    // 20-char text, cap at 10 → no fast-lane → dual-brain
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      shortMessageFastLaneEnabled: true,
+      shortMessageMaxChars: 10,
+    })
+
+    processor.submit('chat-cap', '1234567890abcdefghij', 'user-cap')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(orchestrator).toHaveBeenCalledTimes(1)
+  })
+
+  it('fast lane does NOT fire for clinical override (classification=clinical is not natural)', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'clinical answer', stderr: '', exitCode: 0, durationMs: 10, timedOut: false,
+    })
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'should not run',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      clinicalOverride: true,
+      orchestrator,
+      shortMessageFastLaneEnabled: true,
+    })
+
+    // Even though the message is short and no '?', clinical routes single-brain
+    // unconditionally — fast-lane gate is classification==natural.
+    processor.submit('chat-cli', 'patient update', 'user-cli')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(spawnClaude).toHaveBeenCalledTimes(1)
+    expect(orchestrator).not.toHaveBeenCalled()
   })
 })
 
@@ -1726,6 +1867,7 @@ describe('MessageProcessor — W8.8.3 reporter spans + generations', () => {
       tier0Enabled: true,
       tier0Classifier: fakeClassifier,
       reporter,
+      shortMessageFastLaneEnabled: false, // exercise tier-0 specifically
     })
     processor.submit('chat-q', 'good morning', 'user-q')
     await waitFor(() => deliverMock.mock.calls.length > 0)

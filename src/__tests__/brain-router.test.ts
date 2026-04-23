@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyMessage } from '../brain/router.js'
+import { classifyMessage, isShortMessageFastLane } from '../brain/router.js'
 
 describe('classifyMessage', () => {
   describe('slash commands', () => {
@@ -115,5 +115,50 @@ describe('classifyMessage', () => {
         classifyMessage({ text: 'hello', userId: '12345' }),
       ).toEqual({ kind: 'natural' })
     })
+  })
+})
+
+describe('isShortMessageFastLane (W8.7.1)', () => {
+  it('catches short statements', () => {
+    expect(isShortMessageFastLane('ok cool sounds good')).toBe(true)
+    expect(isShortMessageFastLane('thanks')).toBe(true)
+    expect(isShortMessageFastLane('yes do it')).toBe(true)
+    expect(isShortMessageFastLane('got it thanks')).toBe(true)
+  })
+
+  it('does NOT catch questions (has "?")', () => {
+    expect(isShortMessageFastLane('how are you?')).toBe(false)
+    expect(isShortMessageFastLane('what?')).toBe(false)
+  })
+
+  it('does NOT catch slash commands', () => {
+    expect(isShortMessageFastLane('/network-status')).toBe(false)
+    expect(isShortMessageFastLane('/toggle prime')).toBe(false)
+  })
+
+  it('does NOT catch messages over the length cap (default 80)', () => {
+    const long = 'a'.repeat(90)
+    expect(isShortMessageFastLane(long)).toBe(false)
+    // boundary: 80 chars passes, 81 fails
+    expect(isShortMessageFastLane('a'.repeat(80))).toBe(true)
+    expect(isShortMessageFastLane('a'.repeat(81))).toBe(false)
+  })
+
+  it('respects custom maxChars', () => {
+    expect(isShortMessageFastLane('a'.repeat(40), { maxChars: 30 })).toBe(false)
+    expect(isShortMessageFastLane('a'.repeat(20), { maxChars: 30 })).toBe(true)
+  })
+
+  it('trims whitespace before checking length', () => {
+    expect(isShortMessageFastLane('    ok    ')).toBe(true)
+  })
+
+  it('rejects empty / whitespace-only input', () => {
+    expect(isShortMessageFastLane('')).toBe(false)
+    expect(isShortMessageFastLane('   ')).toBe(false)
+  })
+
+  it('rejects question marks even if buried inside the text', () => {
+    expect(isShortMessageFastLane('ok but how? ok')).toBe(false)
   })
 })

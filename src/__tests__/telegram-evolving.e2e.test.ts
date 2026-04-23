@@ -118,6 +118,9 @@ function makeE2EProcessor(opts: {
       orchestrator,
       evolvingMessageEnabled: opts.evolvingMessageEnabled,
       telegramSurface: opts.telegramSurface,
+      // W8.7.1 — short-message fast lane off so dual-brain path remains
+      // exercised by the Wave-6 E2E scenarios.
+      shortMessageFastLaneEnabled: false,
     },
     deliverMock,
     log,

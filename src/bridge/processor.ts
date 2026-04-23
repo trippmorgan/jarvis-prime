@@ -4,7 +4,11 @@ import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
-import { classifyMessage, type MessageKind } from '../brain/router.js'
+import {
+  classifyMessage,
+  isShortMessageFastLane,
+  type MessageKind,
+} from '../brain/router.js'
 import {
   corpusCallosum,
   type CallosumEventPayload,
@@ -127,6 +131,14 @@ export interface ProcessorConfig {
    * `Tier0Classifier` when `tier0Enabled === true`.
    */
   tier0Classifier?: Tier0Classifier
+  /**
+   * W8.7.1 — short-message fast lane killswitch. When true (default), short
+   * non-question natural messages bypass dual-brain. Set to false to disable
+   * the heuristic and rely only on tier-0 + dual-brain.
+   */
+  shortMessageFastLaneEnabled?: boolean
+  /** Maximum chars for the short-message fast lane (default 80). */
+  shortMessageMaxChars?: number
   /**
    * W8.8 — observability reporter. When omitted, a `NoopReporter` is used
    * and no traces are emitted. server.ts wires the real `LangfuseReporter`
@@ -330,14 +342,37 @@ export class MessageProcessor {
       'classification',
     )
 
+    // W8.7.1 — Short-message fast lane. Pure-shape heuristic that runs BEFORE
+    // tier-0 (saves the embedding round-trip when shape alone is decisive).
+    // Short, non-question, non-slash natural messages route to single-brain.
+    const shortFastLane =
+      classification.kind === 'natural' &&
+      this.config.corpusCallosumEnabled &&
+      this.config.shortMessageFastLaneEnabled !== false &&
+      isShortMessageFastLane(msg.text, {
+        maxChars: this.config.shortMessageMaxChars,
+      })
+
+    if (shortFastLane) {
+      this.log.info(
+        {
+          event: 'short_msg_fast_lane',
+          messageId: msg.id,
+          textLength: msg.text.length,
+        },
+        'short-message fast lane fired',
+      )
+    }
+
     // W8.7 — Tier-0 embedding classifier. Only runs for natural-language
-    // turns where the dual-brain would otherwise fire. A `quick_q` winner
-    // short-circuits to the single-brain path; every other outcome (null,
-    // tool_call, dispatch, deep_review) falls through unchanged so W8.7 is
-    // purely additive.
+    // turns where the dual-brain would otherwise fire AND the cheap short-
+    // message heuristic didn't already catch it. A `quick_q` winner short-
+    // circuits to the single-brain path; every other outcome (null,
+    // tool_call, dispatch, deep_review) falls through unchanged.
     let tier0: Tier0Result | null = null
     if (
       classification.kind === 'natural' &&
+      !shortFastLane &&
       this.config.corpusCallosumEnabled &&
       this.tier0Classifier !== null
     ) {
@@ -379,14 +414,16 @@ export class MessageProcessor {
 
     const useDualBrain =
       classification.kind === 'natural' &&
+      !shortFastLane &&
       !tier0Shortcut &&
       this.config.corpusCallosumEnabled &&
       this.orchestrator !== undefined
 
-    // Update trace with classification + tier-0 metadata before routing.
+    // Update trace with classification + tier-0 + fast-lane metadata.
     trace.update({
       metadata: {
         kind: classification.kind,
+        shortMsgFastLane: shortFastLane,
         tier0Route: tier0?.route ?? null,
         tier0Confidence: tier0?.confidence ?? null,
         tier0TopRoute: tier0?.topRoute ?? null,
@@ -401,15 +438,22 @@ export class MessageProcessor {
       return this.processDualBrain(msg, processStart)
     }
 
-    const singleBrainKind: OrchestratorKind = tier0Shortcut
-      ? 'tier0_quick'
-      : this.resolveSingleBrainKind(classification.kind)
+    // Resolve single-brain kind: short-msg fast lane wins over tier-0 wins
+    // over the slash/clinical/killswitch fallback. Phase labels stay opaque
+    // ("Thinking…") for both fast lanes — user shouldn't see the routing
+    // decision, just a faster response.
+    const singleBrainKind: OrchestratorKind = shortFastLane
+      ? 'short_msg_fast_lane'
+      : tier0Shortcut
+        ? 'tier0_quick'
+        : this.resolveSingleBrainKind(classification.kind)
 
     this.log.info(
       {
         event: 'route_bypass',
         kind: classification.kind,
         singleBrainKind,
+        shortFastLane,
         tier0Shortcut,
         messageId: msg.id,
       },
@@ -448,12 +492,27 @@ export class MessageProcessor {
         'evolving ack returned null — falling back to legacy ack path',
       )
     }
-    return this.processSingleBrainLegacy(msg, processStart)
+    return this.processSingleBrainLegacy(msg, processStart, kind)
+  }
+
+  /**
+   * W8.7.1 — for fast-lane paths (short-message heuristic + tier-0 quick_q),
+   * spawn Claude without tools / slash-commands. Dropping the tool surface
+   * keeps the CLI from booting a full agent session — 6-10s cold start
+   * instead of 30-90s with all tools + MCP + CLAUDE.md loaded. Fast lanes
+   * are chitchat by definition; they don't need Bash/SSH/MCP.
+   *
+   * Slash commands and clinical paths keep tools-on (slash paths route to
+   * skills that need tools; clinical is for the /dispatch-to-clinical flow).
+   */
+  private isFastLaneKind(kind: OrchestratorKind): boolean {
+    return kind === 'short_msg_fast_lane' || kind === 'tier0_quick'
   }
 
   private async processSingleBrainLegacy(
     msg: QueueMessage,
     processStart: number,
+    kind: OrchestratorKind,
   ): Promise<string> {
     let ackSent = false
     const ackTimer = setTimeout(async () => {
@@ -499,10 +558,14 @@ export class MessageProcessor {
         metadata: { promptLength: prompt.length },
       })
 
+      const fastLane = this.isFastLaneKind(kind)
       const result = await spawnClaude(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
+        // W8.7.1 — tools off on the chitchat fast lanes.
+        enableTools: fastLane ? false : undefined,
+        enableSlashCommands: fastLane ? false : undefined,
       })
 
       sbGen?.end({
@@ -526,6 +589,7 @@ export class MessageProcessor {
           outputLength: result.output.length,
           stderrLength: result.stderr.length,
           timedOut: result.timedOut,
+          fastLane,
         },
       })
 
@@ -538,6 +602,7 @@ export class MessageProcessor {
           exitCode: result.exitCode,
           outputLength: result.output.length,
           stderrLength: result.stderr.length,
+          fastLane,
         },
         'single-brain call end',
       )
@@ -635,10 +700,14 @@ export class MessageProcessor {
         metadata: { promptLength: prompt.length, ux: 'evolving' },
       })
 
+      const fastLane = this.isFastLaneKind(kind)
       const result = await spawnClaude(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
+        // W8.7.1 — tools off on the chitchat fast lanes.
+        enableTools: fastLane ? false : undefined,
+        enableSlashCommands: fastLane ? false : undefined,
       })
 
       sbGen?.end({
@@ -780,18 +849,18 @@ export class MessageProcessor {
         },
       })
 
-      // Reconstruct pass timing from the orchestrator's per-pass durations.
-      // Walk backward from `dualEnd`: integration → pass2 → pass1.
+      // Reconstruct pass timing. Walk backward from dualEnd using actual
+      // wall times — not max(left, right) — so router-mode sequential pass-1
+      // (left → skill → right) lands in the correct Langfuse window.
       const integrationEnd = dualEnd
       const integrationStart = new Date(
         integrationEnd.getTime() - t.integrationMs,
       )
       const pass2End = integrationStart
-      const pass2Ms = Math.max(t.p2Left.durationMs, t.p2Right.durationMs)
-      const pass2Start = new Date(pass2End.getTime() - pass2Ms)
+      const pass2Start = new Date(
+        pass2End.getTime() - (t.pass2WallMs ?? Math.max(t.p2Left.durationMs, t.p2Right.durationMs)),
+      )
       const pass1End = pass2Start
-      const pass1Ms = Math.max(t.p1Left.durationMs, t.p1Right.durationMs)
-      const pass1Start = new Date(pass1End.getTime() - pass1Ms)
 
       const redact = (s: string): string =>
         isClinical ? CLINICAL_REDACTED_MARKER : s.slice(0, 4000)

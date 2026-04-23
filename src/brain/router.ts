@@ -58,3 +58,34 @@ export function classifyMessage(input: ClassifyInput): { kind: MessageKind } {
 
   return { kind: 'natural' }
 }
+
+/**
+ * W8.7.1 — Short-message fast lane.
+ *
+ * Heuristic shortcut for trivially-short statements that would otherwise burn
+ * the full 190-second dual-brain pipeline. Returns true when the message is:
+ *   - short enough to be conversational (≤ `maxChars`, default 80),
+ *   - not a question (no '?' anywhere),
+ *   - not a slash command.
+ *
+ * This sits ALONGSIDE the tier-0 embedding classifier as belt-and-suspenders:
+ * tier-0 catches semantically-quick utterances by similarity; this catches the
+ * length-and-shape signature that no embedding can describe ("ok cool sounds
+ * good then we'll do that"). Either path resolving short-circuits to single-
+ * brain Claude (fast path, ~5–10s).
+ *
+ * Pure function — safe to call before tier-0 to avoid an embedding round-trip
+ * on the obvious cases.
+ */
+export function isShortMessageFastLane(
+  text: string,
+  opts: { maxChars?: number } = {},
+): boolean {
+  const maxChars = opts.maxChars ?? 80
+  const trimmed = text.trim()
+  if (trimmed.length === 0) return false
+  if (trimmed.length > maxChars) return false
+  if (trimmed.includes('?')) return false
+  if (trimmed.startsWith('/')) return false
+  return true
+}

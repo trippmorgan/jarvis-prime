@@ -80,6 +80,8 @@ export async function buildServer(config: Config): Promise<ServerContext> {
       routerEnabled: config.JARVIS_ROUTER_ENABLED,
       tier0Enabled: config.JARVIS_TIER0_ENABLED,
       tier0Threshold: config.JARVIS_TIER0_THRESHOLD,
+      shortMessageFastLaneEnabled: config.JARVIS_SHORT_MSG_FAST_LANE,
+      shortMessageMaxChars: config.JARVIS_SHORT_MSG_MAX_CHARS,
       reporter,
       telegramSurface,
     },
