@@ -137,6 +137,10 @@ export type CallosumEventPayload =
       rightTools?: ToolEvidence[]
       rightMode?: "skill" | "research"
       rightSkill?: string
+      /** W8.8.6 — hemisphere stream events for verbose UX. */
+      hemisphere?: "left" | "right"
+      phase?: "pass1" | "pass2" | "integration"
+      streamEvent?: unknown
     }
   | undefined
 
@@ -181,6 +185,21 @@ export async function corpusCallosum(
     }
   }
 
+  // W8.8.6 — build a phase-tagged stream handler for left.call. When onEvent
+  // is absent (tests / no UX) we return undefined and left.call falls back to
+  // the non-streaming spawner. Each forwarded event is wrapped in a
+  // 'hemisphere_tool_use' callback so the responder can format + dedupe.
+  const makeLeftStream = (
+    phase: "pass1" | "pass2" | "integration",
+  ): ((evt: unknown) => void) | undefined => {
+    if (!onEvent) return undefined
+    return (evt) => emit("hemisphere_tool_use", {
+      hemisphere: "left",
+      phase,
+      streamEvent: evt,
+    })
+  }
+
   const start = Date.now()
 
   logger?.info(
@@ -222,6 +241,7 @@ export async function corpusCallosum(
       // wander on heavy prompts and hit the 240s ceiling. (v1.0.1, 2026-04-21;
       // re-confirmed 2026-04-23 after tools-on experiment hit 2/2 timeouts.)
       enableTools: false,
+      onStreamEvent: makeLeftStream("pass1"),
     })
 
     // Parse left's dispatch + tools evidence.
@@ -355,7 +375,12 @@ export async function corpusCallosum(
     const p1RightPrompt = rightAffordancePrompt(basePrompt, history, userMsg)
 
     ;[p1LeftResult, p1RightResult] = await Promise.all([
-      left.call({ system: p1LeftPrompt.system, user: p1LeftPrompt.user, timeoutMs }),
+      left.call({
+        system: p1LeftPrompt.system,
+        user: p1LeftPrompt.user,
+        timeoutMs,
+        onStreamEvent: makeLeftStream("pass1"),
+      }),
       right.call({ system: p1RightPrompt.system, user: p1RightPrompt.user, timeoutMs }),
     ])
   }
@@ -395,7 +420,12 @@ export async function corpusCallosum(
   )
 
   const [p2LeftResult, p2RightResult] = await Promise.all([
-    left.call({ system: p2LeftPrompt.system, user: p2LeftPrompt.user, timeoutMs }),
+    left.call({
+      system: p2LeftPrompt.system,
+      user: p2LeftPrompt.user,
+      timeoutMs,
+      onStreamEvent: makeLeftStream("pass2"),
+    }),
     right.call({ system: p2RightPrompt.system, user: p2RightPrompt.user, timeoutMs }),
   ])
 
@@ -452,6 +482,7 @@ export async function corpusCallosum(
       system: intPrompt.system,
       user: intPrompt.user,
       timeoutMs,
+      onStreamEvent: makeLeftStream("integration"),
     })
     integrationContent = first.content
     integrationCallDurationMs = first.durationMs
@@ -465,6 +496,7 @@ export async function corpusCallosum(
         system: intPrompt.system,
         user: intPrompt.user,
         timeoutMs,
+        onStreamEvent: makeLeftStream("integration"),
       })
       integrationContent = second.content
       integrationCallDurationMs = second.durationMs
@@ -516,6 +548,7 @@ export async function corpusCallosum(
           system: retryPrompt.system,
           user: retryPrompt.user,
           timeoutMs,
+          onStreamEvent: makeLeftStream("integration"),
         })
         const retryCheck = parseSelfCheck(retry.content)
         if (retryCheck && !retryCheck.adequate && retryCheck.gaps.length > 0) {

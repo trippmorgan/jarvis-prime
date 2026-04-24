@@ -55,6 +55,13 @@ export interface HemisphereClient {
      * Default: undefined → caller-default → tools-on.
      */
     enableTools?: boolean
+    /**
+     * W8.8.6 — opt-in stream callback. When present, the hemisphere routes
+     * its underlying spawn through the streaming variant so the orchestrator
+     * can pipe per-tool / per-thinking events to UX. The right hemisphere
+     * (gateway-backed) ignores this for now; only left implements streaming.
+     */
+    onStreamEvent?: (event: unknown) => void
   }): Promise<HemisphereCallResult>
 }
 

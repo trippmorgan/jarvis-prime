@@ -33,6 +33,14 @@ vi.mock('../claude/spawner.js', () => ({
   spawnClaude: vi.fn(),
 }))
 
+// W8.8.6 — left-hemisphere routes to spawnClaudeStream when caller provides
+// onStreamEvent (corpus-callosum sets it when onEvent is present). Delegate
+// to the same mock so existing fixtures stay simple.
+vi.mock('../claude/spawner-stream.js', async () => {
+  const { spawnClaude } = await import('../claude/spawner.js')
+  return { spawnClaudeStream: spawnClaude }
+})
+
 import { spawnClaude } from '../claude/spawner.js'
 
 type CallArg = { system: string; user: string; timeoutMs: number }
@@ -107,6 +115,7 @@ function makeE2EProcessor(opts: {
       corpusCallosumTimeoutMs: 5000,
       clinicalOverride: opts.clinicalOverride,
       orchestrator,
+      defaultMode: 'dual',
     },
     deliverMock,
     log,

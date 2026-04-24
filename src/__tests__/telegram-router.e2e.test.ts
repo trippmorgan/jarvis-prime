@@ -47,6 +47,14 @@ import { SELF_CORRECTION_CAVEAT } from "../brain/integration.js"
 vi.mock("../claude/spawner.js", () => ({
   spawnClaude: vi.fn(),
 }))
+
+// W8.8.6 — left-hemisphere routes to spawnClaudeStream when caller wires
+// onStreamEvent (corpus-callosum sets it when onEvent is present).
+vi.mock("../claude/spawner-stream.js", async () => {
+  const { spawnClaude } = await import("../claude/spawner.js")
+  return { spawnClaudeStream: spawnClaude }
+})
+
 import { spawnClaude } from "../claude/spawner.js"
 
 // ---------------------------------------------------------------------------
@@ -206,6 +214,9 @@ function makeRouterProcessor(opts: {
       // W8.7.1 — short-message fast lane off in router E2Es so short test
       // messages reach the orchestrator under test.
       shortMessageFastLaneEnabled: false,
+      // W8.8.6 — /deep gates dual-brain behind opt-in mode. Router E2E
+      // exercises dual-brain orchestrator, so default to 'dual'.
+      defaultMode: 'dual',
     },
     deliverMock,
     log,

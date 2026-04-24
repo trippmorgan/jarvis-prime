@@ -37,6 +37,13 @@ vi.mock('../claude/spawner.js', () => ({
   spawnClaude: vi.fn(),
 }))
 
+// W8.8.5/6 — evolving + dual-brain paths route to spawnClaudeStream when an
+// event sink is wired (single-brain evolving / dual-brain w/ onEvent).
+vi.mock('../claude/spawner-stream.js', async () => {
+  const { spawnClaude } = await import('../claude/spawner.js')
+  return { spawnClaudeStream: spawnClaude }
+})
+
 import { spawnClaude } from '../claude/spawner.js'
 
 type CallArg = { system: string; user: string; timeoutMs: number }
@@ -121,6 +128,9 @@ function makeE2EProcessor(opts: {
       // W8.7.1 — short-message fast lane off so dual-brain path remains
       // exercised by the Wave-6 E2E scenarios.
       shortMessageFastLaneEnabled: false,
+      // W8.8.6 — /deep gates dual-brain behind opt-in mode. E2E exercises
+      // dual-brain semantics, so default to 'dual' here.
+      defaultMode: 'dual',
     },
     deliverMock,
     log,

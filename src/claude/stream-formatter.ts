@@ -37,6 +37,7 @@ export interface StreamEvent {
       name?: string
       input?: Record<string, unknown>
       text?: string
+      thinking?: string
     }>
   }
   result?: string
@@ -45,6 +46,13 @@ export interface StreamEvent {
 export interface StreamFormatterOptions {
   /** When true, scrub paths under the clinical archive before display. */
   redactClinicalPaths?: boolean
+  /**
+   * When true, surface thinking blocks as 💭 lines (truncated to one
+   * sentence). Default false — single-brain stream stays tool-only to
+   * avoid noise. /deep dual-brain mode opts in for explicit reasoning
+   * visibility.
+   */
+  includeThinking?: boolean
 }
 
 /**
@@ -57,12 +65,37 @@ export function formatStreamEvent(
 ): string | null {
   if (event.type !== 'assistant') return null
   const blocks = event.message?.content ?? []
+  // Tool calls take priority over thinking — they're the most actionable
+  // signal. If the same chunk carries both, surface the tool.
   for (const block of blocks) {
     if (block.type === 'tool_use' && block.name) {
       return formatToolUse(block.name, block.input ?? {}, opts)
     }
   }
+  if (opts.includeThinking) {
+    for (const block of blocks) {
+      if (block.type === 'thinking' && typeof block.thinking === 'string') {
+        const snippet = firstSentence(block.thinking)
+        if (snippet) return `💭 ${snippet}`
+      }
+    }
+  }
   return null
+}
+
+/**
+ * Reduce a thinking block to its first sentence, capped at MAX_INPUT_CHARS.
+ * Falls back to the leading line when no sentence boundary appears.
+ */
+function firstSentence(text: string): string {
+  const cleaned = text.trim()
+  if (cleaned.length === 0) return ''
+  const periodIdx = cleaned.search(/[.!?](\s|$)/)
+  const candidate =
+    periodIdx >= 0 && periodIdx < MAX_INPUT_CHARS * 2
+      ? cleaned.slice(0, periodIdx + 1)
+      : cleaned.split(/\n/)[0] ?? cleaned
+  return truncate(candidate)
 }
 
 function formatToolUse(

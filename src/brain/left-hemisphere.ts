@@ -1,8 +1,15 @@
 import { spawnClaude } from "../claude/spawner.js";
+import { spawnClaudeStream } from "../claude/spawner-stream.js";
 import type { SpawnOptions, SpawnResult } from "../claude/types.js";
+import type { StreamEvent } from "../claude/stream-formatter.js";
 import { LeftHemisphereError, type HemisphereClient } from "./types.js";
 
 export type Spawner = (prompt: string, opts: SpawnOptions) => Promise<SpawnResult>;
+/** W8.8.6 — streaming variant. Optional; left.call routes here when caller supplies onStreamEvent. */
+export type StreamSpawner = (
+  prompt: string,
+  opts: SpawnOptions & { onEvent?: (event: StreamEvent) => void },
+) => Promise<SpawnResult>;
 
 export interface LeftHemisphereLogger {
   info: (o: unknown, m?: string) => void;
@@ -16,6 +23,8 @@ export interface LeftHemisphereConfig {
   logger?: LeftHemisphereLogger;
   /** Injectable for testing. Defaults to the real spawnClaude. */
   spawner?: Spawner;
+  /** Injectable streaming variant for testing. Defaults to spawnClaudeStream. */
+  streamSpawner?: StreamSpawner;
 }
 
 const STDERR_TRUNCATE = 500;
@@ -31,12 +40,14 @@ export class LeftHemisphereClient implements HemisphereClient {
   private readonly model: string;
   private readonly logger?: LeftHemisphereLogger;
   private readonly spawner: Spawner;
+  private readonly streamSpawner: StreamSpawner;
 
   constructor(config: LeftHemisphereConfig) {
     this.claudePath = config.claudePath;
     this.model = config.model;
     this.logger = config.logger;
     this.spawner = config.spawner ?? spawnClaude;
+    this.streamSpawner = config.streamSpawner ?? spawnClaudeStream;
   }
 
   async call(input: {
@@ -44,8 +55,10 @@ export class LeftHemisphereClient implements HemisphereClient {
     user: string;
     timeoutMs: number;
     enableTools?: boolean;
+    /** W8.8.6 — when present, routes through streaming spawner so the caller can pipe tool-use / thinking events to UX. */
+    onStreamEvent?: (event: StreamEvent) => void;
   }): Promise<{ content: string; durationMs: number }> {
-    const { system, user, timeoutMs, enableTools } = input;
+    const { system, user, timeoutMs, enableTools, onStreamEvent } = input;
     const prompt = `${system}\n\n${user}`;
     const start = Date.now();
 
@@ -62,13 +75,16 @@ export class LeftHemisphereClient implements HemisphereClient {
 
     let result: SpawnResult;
     try {
-      result = await this.spawner(prompt, {
+      const spawnOpts = {
         claudePath: this.claudePath,
         model: this.model,
         timeoutMs,
         workingDir: process.cwd(),
         enableTools,
-      });
+      };
+      result = onStreamEvent
+        ? await this.streamSpawner(prompt, { ...spawnOpts, onEvent: onStreamEvent })
+        : await this.spawner(prompt, spawnOpts);
     } catch (err) {
       const durationMs = Date.now() - start;
       this.logger?.error(

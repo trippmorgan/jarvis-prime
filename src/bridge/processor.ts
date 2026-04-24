@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify'
 import { spawnClaude } from '../claude/spawner.js'
 import { spawnClaudeStream } from '../claude/spawner-stream.js'
-import { formatStreamEvent } from '../claude/stream-formatter.js'
+import { formatStreamEvent, type StreamEvent } from '../claude/stream-formatter.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
@@ -1160,6 +1160,28 @@ export class MessageProcessor {
         eventName: string,
         payload?: CallosumEventPayload,
       ): void => {
+        // W8.8.6 — hemisphere stream events. Format the inner Claude
+        // stream-json event with phase prefix + includeThinking on (deep mode
+        // is opt-in for explicit reasoning visibility). Skip integration
+        // events: the deliberation card has already been pinned by the time
+        // integration runs, so further bubble edits would clobber it.
+        if (eventName === 'hemisphere_tool_use' && payload?.streamEvent) {
+          if (payload.phase === 'integration' || cardPosted) return
+          const status = formatStreamEvent(payload.streamEvent as StreamEvent, {
+            redactClinicalPaths: this.config.clinicalOverride === true,
+            includeThinking: true,
+          })
+          if (status) {
+            const tag =
+              payload.phase === 'pass1'
+                ? '[Pass-1 L]'
+                : payload.phase === 'pass2'
+                  ? '[Pass-2 L]'
+                  : '[L]'
+            responder.updatePhase(msg.chatId, ackMessageId, `${tag} ${status}`)
+          }
+          return
+        }
         if (
           eventName === 'callosum_pass2_ok' &&
           payload &&
