@@ -48,6 +48,10 @@ export class TelegramResponder {
 
   private readonly debounceByChat = new Map<string, DebounceState>()
   private readonly typingByChat = new Map<string, ReturnType<typeof setInterval>>()
+  // 2026-04-23 — track last-fired text per chat to avoid Telegram 400s on
+  // duplicate edits (Bot API rejects "message is not modified"). Cleared when
+  // the bubble's debounce state is torn down.
+  private readonly lastTextByChat = new Map<string, string>()
 
   constructor(opts: TelegramResponderOptions) {
     this.surface = opts.surface
@@ -86,6 +90,12 @@ export class TelegramResponder {
   }
 
   updatePhase(chatId: string, messageId: number, label: string): void {
+    // Drop no-op edits — Telegram returns 400 on identical text and our
+    // formatter naturally repeats for tools without distinguishing input
+    // (e.g., consecutive TodoWrite calls). Cheaper to filter here than to
+    // round-trip the API.
+    if (this.lastTextByChat.get(chatId) === label) return
+
     const state = this.debounceByChat.get(chatId)
 
     if (!state) {
@@ -97,6 +107,7 @@ export class TelegramResponder {
         pendingMessageId: null,
       }
       this.debounceByChat.set(chatId, newState)
+      this.lastTextByChat.set(chatId, label)
       this.fireEdit(chatId, messageId, label)
       this.armDebounceWindow(chatId, newState)
       return
@@ -114,6 +125,7 @@ export class TelegramResponder {
     }
     // Clear state: pending intermediate is discarded
     this.debounceByChat.delete(chatId)
+    this.lastTextByChat.delete(chatId)
 
     try {
       await this.surface.editMessageText(chatId, messageId, text)
@@ -162,12 +174,18 @@ export class TelegramResponder {
       state.pendingMessageId = null
       state.timer = null
 
-      if (pendingText !== null && pendingMessageId !== null) {
+      if (
+        pendingText !== null &&
+        pendingMessageId !== null &&
+        this.lastTextByChat.get(chatId) !== pendingText
+      ) {
+        this.lastTextByChat.set(chatId, pendingText)
         this.fireEdit(chatId, pendingMessageId, pendingText)
         this.armDebounceWindow(chatId, state)
       } else {
-        // No pending — debounce window is done
+        // No pending (or pending matches last sent) — debounce window is done
         this.debounceByChat.delete(chatId)
+        this.lastTextByChat.delete(chatId)
       }
     }, this.editDebounceMs)
   }

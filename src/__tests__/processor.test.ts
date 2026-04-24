@@ -23,6 +23,14 @@ vi.mock('../claude/spawner.js', () => ({
   spawnClaude: vi.fn(),
 }))
 
+// W8.8.5 — the evolving path now uses spawnClaudeStream. Tests mock both with
+// the same fn so test fixtures only need to drive `spawnClaude`. Stream events
+// aren't asserted here; stream-formatter has its own unit tests.
+vi.mock('../claude/spawner-stream.js', async () => {
+  const { spawnClaude } = await import('../claude/spawner.js')
+  return { spawnClaudeStream: spawnClaude }
+})
+
 import { spawnClaude } from '../claude/spawner.js'
 
 const MOCK_TRACE: CallosumTrace = {
@@ -88,6 +96,10 @@ function makeProcessor(opts: {
       // dual-brain exercise semantics for the bulk of the suite.
       shortMessageFastLaneEnabled: opts.shortMessageFastLaneEnabled ?? false,
       shortMessageMaxChars: opts.shortMessageMaxChars,
+      // 2026-04-23 — /deep gates dual-brain behind opt-in mode. Production
+      // starts in 'single'; tests stay in 'dual' to keep exercising the
+      // orchestrator path without per-test toggling.
+      defaultMode: 'dual',
     },
     deliverMock,
     log,

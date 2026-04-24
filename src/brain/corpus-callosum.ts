@@ -219,7 +219,8 @@ export async function corpusCallosum(
       // Planner is a pure routing decision — no Bash, no MCP, no CLAUDE.md
       // auto-load. Heavy investigation belongs in the dispatched skill shim
       // (which keeps tools-on). Without this restriction, the planner can
-      // wander on heavy prompts and hit the 240s ceiling. (v1.0.1, 2026-04-21)
+      // wander on heavy prompts and hit the 240s ceiling. (v1.0.1, 2026-04-21;
+      // re-confirmed 2026-04-23 after tools-on experiment hit 2/2 timeouts.)
       enableTools: false,
     })
 

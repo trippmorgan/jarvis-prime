@@ -1,5 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify'
 import { spawnClaude } from '../claude/spawner.js'
+import { spawnClaudeStream } from '../claude/spawner-stream.js'
+import { formatStreamEvent } from '../claude/stream-formatter.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
@@ -19,6 +21,7 @@ import { LeftHemisphereClient } from '../brain/left-hemisphere.js'
 import { RightHemisphereClient } from '../brain/right-hemisphere.js'
 import { makeRightClient } from '../brain/right-client-factory.js'
 import { Tier0Classifier, type Tier0Result } from '../brain/tier0-classifier.js'
+import { ModeState, type Mode } from './mode-state.js'
 import {
   NoopReporter,
   type Reporter,
@@ -67,6 +70,22 @@ export type OrchestratorFn = (input: {
   /** Optional phase-event callback used by the evolving-message UX. */
   onEvent?: (eventName: string, payload?: CallosumEventPayload) => void
 }) => Promise<BrainResult>
+
+/**
+ * Match the /deep slash command. Returns:
+ *   - 'toggle' when the message is exactly `/deep` (case-insensitive)
+ *   - 'status' when the message is `/deep status` (case-insensitive)
+ *   - null otherwise — message proceeds through normal classification
+ *
+ * Trailing whitespace is tolerated. Anything else after `/deep` (other than
+ * `status`) is intentionally not matched — keeps the surface tiny.
+ */
+export function matchDeepCommand(text: string): 'toggle' | 'status' | null {
+  const trimmed = text.trim().toLowerCase()
+  if (trimmed === '/deep') return 'toggle'
+  if (trimmed === '/deep status') return 'status'
+  return null
+}
 
 export interface ProcessorConfig {
   claudePath: string
@@ -145,6 +164,12 @@ export interface ProcessorConfig {
    * when `LANGFUSE_ENABLED=true` + credentials are set.
    */
   reporter?: Reporter
+  /**
+   * Initial dual-brain mode. Production always starts in 'single' (the
+   * default) per the /deep design — restart resets state. Tests opt into
+   * 'dual' to exercise the orchestrator path.
+   */
+  defaultMode?: Mode
 }
 
 export class MessageProcessor {
@@ -159,6 +184,7 @@ export class MessageProcessor {
   private readonly tier0Classifier: Tier0Classifier | null
   private readonly reporter: Reporter
   private readonly liveTraces: Map<string, TraceHandle> = new Map()
+  private readonly modeState: ModeState
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
     this.config = config
@@ -167,6 +193,7 @@ export class MessageProcessor {
     this.history = new ConversationHistory(config.historyPath ?? DEFAULT_HISTORY_PATH)
     this.promptBuilder = new PromptBuilder(this.history)
     this.queue = new MessageQueue((msg) => this.process(msg))
+    this.modeState = new ModeState(config.defaultMode ?? 'single')
 
     // Build orchestrator (if dual-brain enabled). Respects injected override for tests.
     if (config.orchestrator) {
@@ -298,6 +325,14 @@ export class MessageProcessor {
       'process start',
     )
 
+    // /deep — system command. Toggles dual-brain mode (or reports current
+    // state with `/deep status`). No history append, no Claude spawn, no
+    // trace open — just a confirmation reply.
+    const deepCommand = matchDeepCommand(msg.text)
+    if (deepCommand !== null) {
+      return this.handleDeepCommand(deepCommand, msg, processStart)
+    }
+
     this.history.append('user', msg.text)
     this.log.info(
       {
@@ -412,11 +447,15 @@ export class MessageProcessor {
 
     const tier0Shortcut = tier0?.route === 'quick_q'
 
+    // 2026-04-23 — Dual-brain is now opt-in via /deep. Default flow is
+    // single-brain Claude with tools-on. Set the mode to 'dual' via /deep
+    // to engage the corpus-callosum orchestrator.
     const useDualBrain =
       classification.kind === 'natural' &&
       !shortFastLane &&
       !tier0Shortcut &&
       this.config.corpusCallosumEnabled &&
+      this.modeState.current === 'dual' &&
       this.orchestrator !== undefined
 
     // Update trace with classification + tier-0 + fast-lane metadata.
@@ -463,6 +502,43 @@ export class MessageProcessor {
   }
 
   /**
+   * Handle the /deep slash command. Toggles dual-brain mode (or reports
+   * current state with /deep status). Sends a confirmation message and
+   * finalises the trace — does not append to history or spawn Claude.
+   */
+  private async handleDeepCommand(
+    action: 'toggle' | 'status',
+    msg: QueueMessage,
+    processStart: number,
+  ): Promise<string> {
+    const previous = this.modeState.current
+    const mode = action === 'toggle' ? this.modeState.toggle() : previous
+    const reply =
+      mode === 'dual'
+        ? action === 'status'
+          ? '🧠 Dual-brain ON — Claude + Codex collaborating. /deep to flip back.'
+          : '🧠 Dual-brain ON — Claude + Codex collaborating. /deep again to flip back.'
+        : action === 'status'
+          ? '⚡ Claude solo. /deep to engage dual-brain.'
+          : '⚡ Claude solo. /deep again to engage dual-brain.'
+
+    this.log.info(
+      {
+        event: 'deep_command',
+        messageId: msg.id,
+        action,
+        previousMode: previous,
+        mode,
+      },
+      `/deep ${action} → ${mode}`,
+    )
+
+    await this.deliver(msg.chatId, reply).catch(() => {})
+    this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'legacy', reply)
+    return reply
+  }
+
+  /**
    * Map a classification kind + current config state into the OrchestratorKind
    * used by phase-labels.ts. Dual-brain natural messages use 'natural'; the
    * single-brain fallback for a natural message (killswitch or orchestrator
@@ -505,8 +581,13 @@ export class MessageProcessor {
    * Slash commands and clinical paths keep tools-on (slash paths route to
    * skills that need tools; clinical is for the /dispatch-to-clinical flow).
    */
-  private isFastLaneKind(kind: OrchestratorKind): boolean {
-    return kind === 'short_msg_fast_lane' || kind === 'tier0_quick'
+  private isFastLaneKind(_kind: OrchestratorKind): boolean {
+    // 2026-04-23 — tools-on everywhere per user directive. Single-brain still
+    // routes via short-msg / tier0 shortcuts (saves dual-brain latency), but
+    // every Claude spawn keeps tools + slash commands enabled so Prime can
+    // actually do shell work, MCP calls, etc. Re-enable fast-lane tools-off
+    // by returning the original `_kind === 'short_msg_fast_lane' || _kind === 'tier0_quick'`.
+    return false
   }
 
   private async processSingleBrainLegacy(
@@ -701,13 +782,23 @@ export class MessageProcessor {
       })
 
       const fastLane = this.isFastLaneKind(kind)
-      const result = await spawnClaude(prompt, {
+      // W8.8.5 — stream tool-use events to the bubble so the user sees what
+      // Claude is doing instead of staring at a 5-minute "Thinking…" label.
+      // Each tool_use event maps to a status line via formatStreamEvent;
+      // updatePhase is debounced inside the responder so Telegram's edit
+      // limit isn't an issue.
+      const result = await spawnClaudeStream(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
-        // W8.7.1 — tools off on the chitchat fast lanes.
         enableTools: fastLane ? false : undefined,
         enableSlashCommands: fastLane ? false : undefined,
+        onEvent: (event) => {
+          const status = formatStreamEvent(event, {
+            redactClinicalPaths: isClinical,
+          })
+          if (status) responder.updatePhase(msg.chatId, ackMessageId, status)
+        },
       })
 
       sbGen?.end({
