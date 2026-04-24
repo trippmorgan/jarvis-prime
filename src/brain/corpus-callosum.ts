@@ -156,9 +156,11 @@ export interface CorpusCallosumInput {
  * Throws:
  *   - LeftHemisphereError  if pass-1 or pass-2 left fails (bubbled from client).
  *   - RightHemisphereError if pass-1 or pass-2 right fails (bubbled from client).
- *   - IntegrationError     if the integration call fails on both its attempt
- *                          and its one retry. The original error is preserved
- *                          via `cause`.
+ *   - IntegrationError     if the integration call fails. The original error
+ *                          is preserved via `cause`. No retry on timeout —
+ *                          retrying with the same budget doesn't help a task
+ *                          that genuinely needs more time; it just doubles
+ *                          latency before the same failure.
  */
 export async function corpusCallosum(
   deps: CorpusCallosumDeps,
@@ -453,7 +455,7 @@ export async function corpusCallosum(
     rightSkill: rightSkillForCard,
   })
 
-  // --- Integration — Claude only, with one-shot retry ----------------------
+  // --- Integration — Claude only, single attempt --------------------------
   logger?.info({ event: "callosum_integration_start" }, "integration start")
   emit("callosum_integration_start")
 
@@ -486,41 +488,21 @@ export async function corpusCallosum(
     })
     integrationContent = first.content
     integrationCallDurationMs = first.durationMs
-  } catch (firstErr) {
-    logger?.warn(
-      { event: "callosum_integration_retry" },
-      "integration first attempt failed, retrying once",
+  } catch (err) {
+    logger?.error(
+      {
+        event: "callosum_integration_failed",
+        error: err instanceof Error ? err.message : String(err),
+      },
+      "integration failed",
     )
-    try {
-      const second = await left.call({
-        system: intPrompt.system,
-        user: intPrompt.user,
-        timeoutMs,
-        onStreamEvent: makeLeftStream("integration"),
-      })
-      integrationContent = second.content
-      integrationCallDurationMs = second.durationMs
-    } catch (secondErr) {
-      logger?.error(
-        {
-          event: "callosum_integration_failed",
-          error:
-            secondErr instanceof Error
-              ? secondErr.message
-              : String(secondErr),
-        },
-        "integration failed after retry",
-      )
-      if (secondErr instanceof IntegrationError) {
-        throw secondErr
-      }
-      throw new IntegrationError(
-        `integration failed after retry: ${
-          secondErr instanceof Error ? secondErr.message : String(secondErr)
-        }`,
-        secondErr,
-      )
+    if (err instanceof IntegrationError) {
+      throw err
     }
+    throw new IntegrationError(
+      `integration failed: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    )
   }
 
   // --- Wave 8 / T12 — bounded self-correction (router mode only) -----------

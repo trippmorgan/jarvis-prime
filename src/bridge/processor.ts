@@ -45,7 +45,7 @@ import {
 } from '../telegram/responder.js'
 
 const ACK_DELAY_MS = 8_000
-const HARD_TIMEOUT_MS = 300_000
+const HARD_TIMEOUT_MS = 600_000
 const TELEGRAM_MAX_LENGTH = 4096
 const DEFAULT_HISTORY_PATH = '/home/tripp/.openclaw/workspace/jarvis-prime/.data/conversation-history.jsonl'
 

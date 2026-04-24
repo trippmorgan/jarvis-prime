@@ -323,12 +323,11 @@ describe("corpusCallosum — error paths", () => {
     expect(left.calls.length).toBeLessThanOrEqual(2)
   })
 
-  it("integration fails once then succeeds on retry", async () => {
+  it("integration failure → IntegrationError thrown (no retry)", async () => {
     const left = makeFakeClient([
       { content: "L1", durationMs: 10 },
       { content: "L2", durationMs: 11 },
-      { error: new LeftHemisphereError("transient integration fail") },
-      { content: "final after retry", durationMs: 13 },
+      { error: new LeftHemisphereError("integration fail") },
     ])
     const right = makeFakeClient([
       { content: "R1", durationMs: 20 },
@@ -337,11 +336,12 @@ describe("corpusCallosum — error paths", () => {
     const logger = makeLogger()
     const deps = buildDeps(left, right, { logger })
 
-    const result = await corpusCallosum(deps, HAPPY_INPUT)
+    await expect(corpusCallosum(deps, HAPPY_INPUT)).rejects.toBeInstanceOf(
+      IntegrationError,
+    )
 
-    expect(result.finalText).toBe("final after retry")
-    // 2 integration attempts + p1 + p2 = 4 total
-    expect(left.calls).toHaveLength(4)
+    // p1 + p2 + 1 integration attempt = 3 total (no retry)
+    expect(left.calls).toHaveLength(3)
 
     const retryEvent = (logger.warn.mock.calls as Array<Array<unknown>>).find(
       (args) => {
@@ -349,25 +349,7 @@ describe("corpusCallosum — error paths", () => {
         return arg0?.event === "callosum_integration_retry"
       },
     )
-    expect(retryEvent).toBeTruthy()
-  })
-
-  it("integration fails twice → IntegrationError thrown", async () => {
-    const left = makeFakeClient([
-      { content: "L1", durationMs: 10 },
-      { content: "L2", durationMs: 11 },
-      { error: new LeftHemisphereError("first integration fail") },
-      { error: new LeftHemisphereError("second integration fail") },
-    ])
-    const right = makeFakeClient([
-      { content: "R1", durationMs: 20 },
-      { content: "R2", durationMs: 21 },
-    ])
-    const deps = buildDeps(left, right)
-
-    await expect(corpusCallosum(deps, HAPPY_INPUT)).rejects.toBeInstanceOf(
-      IntegrationError,
-    )
+    expect(retryEvent).toBeFalsy()
   })
 })
 
