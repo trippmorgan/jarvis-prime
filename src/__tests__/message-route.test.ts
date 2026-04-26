@@ -9,8 +9,12 @@ import { MessageProcessor } from '../bridge/processor.js'
 vi.mock('../claude/spawner.js', () => ({
   spawnClaude: vi.fn(),
 }))
+vi.mock('../claude/spawner-stream.js', () => ({
+  spawnClaudeStream: vi.fn(),
+}))
 
 import { spawnClaude } from '../claude/spawner.js'
+import { spawnClaudeStream } from '../claude/spawner-stream.js'
 
 const deliverMock = vi.fn<[string, string], Promise<void>>().mockResolvedValue(undefined)
 
@@ -42,7 +46,7 @@ describe('POST /message', () => {
   })
 
   it('accepts valid message and returns 202', async () => {
-    vi.mocked(spawnClaude).mockResolvedValue({
+    vi.mocked(spawnClaudeStream).mockResolvedValue({
       output: 'Hello from Claude',
       stderr: '',
       exitCode: 0,
@@ -73,7 +77,7 @@ describe('POST /message', () => {
   })
 
   it('calls spawnClaude after processing', async () => {
-    vi.mocked(spawnClaude).mockResolvedValue({
+    vi.mocked(spawnClaudeStream).mockResolvedValue({
       output: 'Test response',
       stderr: '',
       exitCode: 0,
@@ -89,14 +93,14 @@ describe('POST /message', () => {
 
     await new Promise((r) => setTimeout(r, 100))
 
-    expect(spawnClaude).toHaveBeenCalledWith(
+    expect(spawnClaudeStream).toHaveBeenCalledWith(
       expect.stringContaining('Hello'),
       expect.objectContaining({ model: 'sonnet' }),
     )
   })
 
   it('delivers timeout error gracefully', async () => {
-    vi.mocked(spawnClaude).mockResolvedValue({
+    vi.mocked(spawnClaudeStream).mockResolvedValue({
       output: '',
       stderr: '',
       exitCode: 1,
@@ -117,7 +121,7 @@ describe('POST /message', () => {
   })
 
   it('delivers Claude error gracefully', async () => {
-    vi.mocked(spawnClaude).mockResolvedValue({
+    vi.mocked(spawnClaudeStream).mockResolvedValue({
       output: '',
       stderr: 'Something went wrong',
       exitCode: 1,

@@ -68,135 +68,133 @@ export class TelegramPoller {
     this.abortController?.abort()
   }
 
-  async sendMessage(chatId: string, text: string, parseMode?: string): Promise<boolean> {
-    try {
-      const body: Record<string, unknown> = { chat_id: chatId, text }
-      if (parseMode) body.parse_mode = parseMode
-
-      const res = await fetch(`${this.apiBase}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => `HTTP ${res.status}`)
-
-        // Markdown parse failure — retry without formatting
-        if (parseMode && res.status === 400 && errText.includes("can't parse entities")) {
-          this.log.warn({ chatId }, 'Markdown parse failed — retrying as plain text')
-          return this.sendMessage(chatId, text)
+  /**
+   * Wraps fetch with one retry on transient network failures (DNS hiccups,
+   * TLS handshake aborts — observed as `fetch failed` against
+   * api.telegram.org). HTTP error responses (4xx/5xx) are NOT retried — those
+   * are returned to the caller so existing per-method handling can apply
+   * (markdown reparse, benign 400s, etc.). Returns null only when both
+   * attempts threw.
+   */
+  private async fetchTelegram(path: string, body: object, ctx: object): Promise<Response | null> {
+    const url = `${this.apiBase}/${path}`
+    const init: RequestInit = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await fetch(url, init)
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        if (attempt === 0) {
+          this.log.warn({ ...ctx, path, error: errMsg }, 'Telegram fetch failed — retrying once after 200ms')
+          await sleep(200)
+          continue
         }
+        this.log.error({ ...ctx, path, error: errMsg }, 'Telegram fetch failed after retry')
+        return null
+      }
+    }
+    return null
+  }
 
-        this.log.error({ chatId, status: res.status, error: errText }, 'sendMessage failed')
-        return false
+  async sendMessage(chatId: string, text: string, parseMode?: string): Promise<boolean> {
+    const body: Record<string, unknown> = { chat_id: chatId, text }
+    if (parseMode) body.parse_mode = parseMode
+
+    const res = await this.fetchTelegram('sendMessage', body, { chatId })
+    if (!res) return false
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => `HTTP ${res.status}`)
+
+      // Markdown parse failure — retry without formatting
+      if (parseMode && res.status === 400 && errText.includes("can't parse entities")) {
+        this.log.warn({ chatId }, 'Markdown parse failed — retrying as plain text')
+        return this.sendMessage(chatId, text)
       }
 
-      return true
-    } catch (err) {
-      this.log.error({ chatId, error: err instanceof Error ? err.message : String(err) }, 'sendMessage error')
+      this.log.error({ chatId, status: res.status, error: errText }, 'sendMessage failed')
       return false
     }
+
+    return true
   }
 
   async sendMessageAndGetId(chatId: string, text: string, parseMode?: string): Promise<number | null> {
+    const body: Record<string, unknown> = { chat_id: chatId, text }
+    if (parseMode) body.parse_mode = parseMode
+
+    const res = await this.fetchTelegram('sendMessage', body, { chatId })
+    if (!res) return null
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => `HTTP ${res.status}`)
+      this.log.error({ chatId, status: res.status, error: errText }, 'sendMessageAndGetId failed')
+      return null
+    }
+
     try {
-      const body: Record<string, unknown> = { chat_id: chatId, text }
-      if (parseMode) body.parse_mode = parseMode
-
-      const res = await fetch(`${this.apiBase}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => `HTTP ${res.status}`)
-        this.log.error({ chatId, status: res.status, error: errText }, 'sendMessageAndGetId failed')
-        return null
-      }
-
       const data = (await res.json()) as { ok: boolean; result?: { message_id: number } }
       if (!data.ok || !data.result || typeof data.result.message_id !== 'number') {
         this.log.error({ chatId }, 'sendMessageAndGetId: unexpected response shape')
         return null
       }
-
       return data.result.message_id
     } catch (err) {
       this.log.error(
         { chatId, error: err instanceof Error ? err.message : String(err) },
-        'sendMessageAndGetId error',
+        'sendMessageAndGetId parse error',
       )
       return null
     }
   }
 
   async editMessageText(chatId: string, messageId: number, text: string): Promise<boolean> {
-    try {
-      const body = { chat_id: chatId, message_id: messageId, text }
+    const body = { chat_id: chatId, message_id: messageId, text }
 
-      const res = await fetch(`${this.apiBase}/editMessageText`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+    const res = await this.fetchTelegram('editMessageText', body, { chatId, messageId })
+    if (!res) return false
 
-      if (!res.ok) {
-        const errText = await res.text().catch(() => `HTTP ${res.status}`)
+    if (!res.ok) {
+      const errText = await res.text().catch(() => `HTTP ${res.status}`)
 
-        if (
-          res.status === 400 &&
-          (errText.includes('message is not modified') || errText.includes('chat not found'))
-        ) {
-          this.log.warn({ chatId, messageId, status: res.status }, 'editMessageText swallowed benign 400')
-          return false
-        }
-
-        this.log.error({ chatId, messageId, status: res.status, error: errText }, 'editMessageText failed')
+      if (
+        res.status === 400 &&
+        (errText.includes('message is not modified') || errText.includes('chat not found'))
+      ) {
+        this.log.warn({ chatId, messageId, status: res.status }, 'editMessageText swallowed benign 400')
         return false
       }
 
-      return true
-    } catch (err) {
-      this.log.error(
-        { chatId, messageId, error: err instanceof Error ? err.message : String(err) },
-        'editMessageText error',
-      )
+      this.log.error({ chatId, messageId, status: res.status, error: errText }, 'editMessageText failed')
       return false
     }
+
+    return true
   }
 
   async sendChatAction(chatId: string, action: string): Promise<boolean> {
-    try {
-      const body = { chat_id: chatId, action }
+    const body = { chat_id: chatId, action }
 
-      const res = await fetch(`${this.apiBase}/sendChatAction`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+    const res = await this.fetchTelegram('sendChatAction', body, { chatId, action })
+    if (!res) return false
 
-      if (!res.ok) {
-        const errText = await res.text().catch(() => `HTTP ${res.status}`)
+    if (!res.ok) {
+      const errText = await res.text().catch(() => `HTTP ${res.status}`)
 
-        if (res.status === 400) {
-          this.log.warn({ chatId, action, error: errText }, 'sendChatAction swallowed 400')
-          return false
-        }
-
-        this.log.error({ chatId, action, status: res.status, error: errText }, 'sendChatAction failed')
+      if (res.status === 400) {
+        this.log.warn({ chatId, action, error: errText }, 'sendChatAction swallowed 400')
         return false
       }
 
-      return true
-    } catch (err) {
-      this.log.error(
-        { chatId, action, error: err instanceof Error ? err.message : String(err) },
-        'sendChatAction error',
-      )
+      this.log.error({ chatId, action, status: res.status, error: errText }, 'sendChatAction failed')
       return false
     }
+
+    return true
   }
 
   private async poll(): Promise<void> {

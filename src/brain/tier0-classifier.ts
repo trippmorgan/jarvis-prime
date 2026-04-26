@@ -200,6 +200,28 @@ export class Tier0Classifier {
     return this.encoder !== null && this.seedVectors !== null
   }
 
+  /**
+   * Trigger model + seed-vector loading without classifying. Safe to call
+   * during server startup so the first real Telegram turn doesn't pay the
+   * ~1300ms cold-start hit. Never throws — failures flip `initFailed` so
+   * subsequent classify() calls fall through gracefully.
+   */
+  async prewarm(): Promise<void> {
+    if (this.initFailed) return
+    try {
+      await this.ensureReady()
+    } catch (err) {
+      this.initFailed = true
+      this.logger?.warn(
+        {
+          event: "tier0_init_failed",
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "tier0 prewarm failed — falling through to existing routing",
+      )
+    }
+  }
+
   /** Drives lazy init — coalesces concurrent callers. */
   private ensureReady(): Promise<void> {
     if (this.initPromise) return this.initPromise

@@ -314,6 +314,17 @@ export class MessageProcessor {
     return this.queue.isProcessing()
   }
 
+  /**
+   * Pre-load the tier-0 embedder + seed vectors during server startup so the
+   * first real Telegram turn doesn't pay the ~1300ms cold init cost.
+   * No-op when tier-0 is disabled. Never throws.
+   */
+  async prewarmTier0(): Promise<void> {
+    if (this.tier0Classifier) {
+      await this.tier0Classifier.prewarm()
+    }
+  }
+
   private async process(msg: QueueMessage): Promise<string> {
     const processStart = Date.now()
     this.log.info(
@@ -640,13 +651,36 @@ export class MessageProcessor {
       })
 
       const fastLane = this.isFastLaneKind(kind)
-      const result = await spawnClaude(prompt, {
+      // 2026-04-25 — legacy path also streams tool events so a long tool-heavy
+      // turn (e.g. cross-machine SSH fix) doesn't go silent for minutes when
+      // the evolving UX has fallen back. Posts a fresh standalone progress
+      // bubble at most once per minute, only when a new tool event has arrived
+      // since the last post — avoids spam on chitchat turns.
+      let latestToolStatus: string | null = null
+      let lastProgressPostedAt = 0
+      let lastProgressPostedStatus: string | null = null
+      const LEGACY_PROGRESS_INTERVAL_MS = 60_000
+      const result = await spawnClaudeStream(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
         // W8.7.1 — tools off on the chitchat fast lanes.
         enableTools: fastLane ? false : undefined,
         enableSlashCommands: fastLane ? false : undefined,
+        onEvent: (event) => {
+          const status = formatStreamEvent(event, { redactClinicalPaths: isClinical })
+          if (!status) return
+          latestToolStatus = status
+          const now = Date.now()
+          if (
+            now - lastProgressPostedAt >= LEGACY_PROGRESS_INTERVAL_MS &&
+            latestToolStatus !== lastProgressPostedStatus
+          ) {
+            lastProgressPostedAt = now
+            lastProgressPostedStatus = latestToolStatus
+            void this.deliver(msg.chatId, latestToolStatus).catch(() => {})
+          }
+        },
       })
 
       sbGen?.end({

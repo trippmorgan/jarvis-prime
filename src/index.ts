@@ -2,7 +2,7 @@ import { loadConfig } from "./config.js";
 import { buildServer } from "./server.js";
 
 const config = loadConfig();
-const { server, poller, reporter } = await buildServer(config);
+const { server, processor, poller, reporter } = await buildServer(config);
 
 const shutdown = async (signal: string) => {
   server.log.info({ signal }, "Shutting down");
@@ -24,6 +24,16 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 try {
   await server.listen({ port: config.PORT, host: "0.0.0.0" });
+
+  // 2026-04-25 — pre-warm tier-0 embedder so the first Telegram turn doesn't
+  // pay the ~1300ms cold-start hit (xenova model load + seed vector encoding).
+  // Fire-and-forget; the classifier is graceful on failure.
+  void processor.prewarmTier0().catch((err) => {
+    server.log.warn(
+      { error: err instanceof Error ? err.message : String(err) },
+      "tier0 prewarm threw — falling through to lazy init",
+    );
+  });
 
   if (poller) {
     poller.start().catch((err) => {
