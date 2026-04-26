@@ -80,6 +80,21 @@ describe('loadConfig defaults', () => {
     expect(cfg.CORPUS_CALLOSUM_TIMEOUT_MS).toBe(1_200_000)
   })
 
+  it('defaults JARVIS_WORKING_DIR to SuperServer path', () => {
+    process.env.OPENCLAW_GATEWAY_URL = 'http://127.0.0.1:18789'
+    process.env.OPENCLAW_GATEWAY_TOKEN = 'test-token'
+    const cfg = loadConfig()
+    expect(cfg.JARVIS_WORKING_DIR).toBe('/home/tripp/.openclaw/workspace/jarvis-prime/')
+  })
+
+  it('reads JARVIS_WORKING_DIR from env when set (port portability)', () => {
+    process.env.OPENCLAW_GATEWAY_URL = 'http://127.0.0.1:18789'
+    process.env.OPENCLAW_GATEWAY_TOKEN = 'test-token'
+    process.env.JARVIS_WORKING_DIR = '/home/jarvisagent/.openclaw/workspace/jarvis-prime/'
+    const cfg = loadConfig()
+    expect(cfg.JARVIS_WORKING_DIR).toBe('/home/jarvisagent/.openclaw/workspace/jarvis-prime/')
+  })
+
   it('defaults JARVIS_EVOLVING_MESSAGE_ENABLED to true (W6-T1)', () => {
     process.env.CORPUS_CALLOSUM_ENABLED = 'false'
     const cfg = loadConfig()

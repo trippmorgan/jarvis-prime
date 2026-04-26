@@ -65,7 +65,7 @@ describe("spawnClaude", () => {
         "--dangerously-skip-permissions",
       ],
       expect.objectContaining({
-        cwd: "/home/tripp/.openclaw/workspace/jarvis-prime/",
+        cwd: process.cwd(),
         stdio: ["pipe", "pipe", "pipe"],
       }),
     );

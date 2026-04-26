@@ -6,7 +6,6 @@ const DEFAULTS = {
   claudePath: '/home/tripp/.local/bin/claude',
   model: 'sonnet',
   timeoutMs: 300_000,
-  workingDir: '/home/tripp/.openclaw/workspace/jarvis-prime/',
 } as const
 
 export interface StreamSpawnCallbacks {
@@ -34,7 +33,7 @@ export async function spawnClaudeStream(
   const claudePath = opts.claudePath ?? DEFAULTS.claudePath
   const model = opts.model ?? DEFAULTS.model
   const timeoutMs = opts.timeoutMs ?? DEFAULTS.timeoutMs
-  const workingDir = opts.workingDir ?? DEFAULTS.workingDir
+  const workingDir = opts.workingDir ?? process.cwd()
   const enableTools = opts.enableTools ?? true
   const enableSlashCommands = opts.enableSlashCommands ?? true
   const onEvent = opts.onEvent

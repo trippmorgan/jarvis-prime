@@ -5,7 +5,6 @@ const DEFAULTS = {
   claudePath: "/home/tripp/.local/bin/claude",
   model: "sonnet",
   timeoutMs: 120_000,
-  workingDir: "/home/tripp/.openclaw/workspace/jarvis-prime/",
 } as const;
 
 /**
@@ -21,7 +20,7 @@ export async function spawnClaude(
   const claudePath = opts?.claudePath ?? DEFAULTS.claudePath;
   const model = opts?.model ?? DEFAULTS.model;
   const timeoutMs = opts?.timeoutMs ?? DEFAULTS.timeoutMs;
-  const workingDir = opts?.workingDir ?? DEFAULTS.workingDir;
+  const workingDir = opts?.workingDir ?? process.cwd();
   const enableTools = opts?.enableTools ?? true;
   const enableSlashCommands = opts?.enableSlashCommands ?? true;
 

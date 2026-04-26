@@ -1,4 +1,5 @@
 import type { FastifyBaseLogger } from 'fastify'
+import { join } from 'node:path'
 import { spawnClaude } from '../claude/spawner.js'
 import { spawnClaudeStream } from '../claude/spawner-stream.js'
 import { formatStreamEvent, type StreamEvent } from '../claude/stream-formatter.js'
@@ -47,7 +48,7 @@ import {
 const ACK_DELAY_MS = 8_000
 const HARD_TIMEOUT_MS = 600_000
 const TELEGRAM_MAX_LENGTH = 4096
-const DEFAULT_HISTORY_PATH = '/home/tripp/.openclaw/workspace/jarvis-prime/.data/conversation-history.jsonl'
+const HISTORY_RELATIVE_PATH = '.data/conversation-history.jsonl'
 
 export interface DeliverFn {
   (chatId: string, text: string): Promise<void>
@@ -91,6 +92,8 @@ export interface ProcessorConfig {
   claudePath: string
   claudeModel: string
   claudeTimeoutMs: number
+  /** Bridge working directory — cwd for every Claude spawn, anchor for history path. */
+  workingDir: string
   historyPath?: string
   /** Dual-brain kill-switch. When false, every message takes the single-brain path. */
   corpusCallosumEnabled: boolean
@@ -190,7 +193,9 @@ export class MessageProcessor {
     this.config = config
     this.deliver = deliver
     this.log = log
-    this.history = new ConversationHistory(config.historyPath ?? DEFAULT_HISTORY_PATH)
+    this.history = new ConversationHistory(
+      config.historyPath ?? join(config.workingDir, HISTORY_RELATIVE_PATH),
+    )
     this.promptBuilder = new PromptBuilder(this.history)
     this.queue = new MessageQueue((msg) => this.process(msg))
     this.modeState = new ModeState(config.defaultMode ?? 'single')
@@ -202,6 +207,7 @@ export class MessageProcessor {
       const leftClient = new LeftHemisphereClient({
         claudePath: config.claudePath,
         model: config.claudeModel,
+        workingDir: config.workingDir,
         logger: this.log,
       })
       const timeoutMs = config.corpusCallosumTimeoutMs
@@ -663,6 +669,7 @@ export class MessageProcessor {
       const result = await spawnClaudeStream(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
+        workingDir: this.config.workingDir,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
         // W8.7.1 — tools off on the chitchat fast lanes.
         enableTools: fastLane ? false : undefined,
@@ -824,6 +831,7 @@ export class MessageProcessor {
       const result = await spawnClaudeStream(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
+        workingDir: this.config.workingDir,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
         enableTools: fastLane ? false : undefined,
         enableSlashCommands: fastLane ? false : undefined,

@@ -20,6 +20,8 @@ export interface LeftHemisphereLogger {
 export interface LeftHemisphereConfig {
   claudePath: string;
   model: string;
+  /** Bridge working directory — passed as cwd to every Claude spawn. */
+  workingDir: string;
   logger?: LeftHemisphereLogger;
   /** Injectable for testing. Defaults to the real spawnClaude. */
   spawner?: Spawner;
@@ -38,6 +40,7 @@ const STDERR_TRUNCATE = 500;
 export class LeftHemisphereClient implements HemisphereClient {
   private readonly claudePath: string;
   private readonly model: string;
+  private readonly workingDir: string;
   private readonly logger?: LeftHemisphereLogger;
   private readonly spawner: Spawner;
   private readonly streamSpawner: StreamSpawner;
@@ -45,6 +48,7 @@ export class LeftHemisphereClient implements HemisphereClient {
   constructor(config: LeftHemisphereConfig) {
     this.claudePath = config.claudePath;
     this.model = config.model;
+    this.workingDir = config.workingDir;
     this.logger = config.logger;
     this.spawner = config.spawner ?? spawnClaude;
     this.streamSpawner = config.streamSpawner ?? spawnClaudeStream;
@@ -79,7 +83,7 @@ export class LeftHemisphereClient implements HemisphereClient {
         claudePath: this.claudePath,
         model: this.model,
         timeoutMs,
-        workingDir: process.cwd(),
+        workingDir: this.workingDir,
         enableTools,
       };
       result = onStreamEvent

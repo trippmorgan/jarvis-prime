@@ -68,6 +68,7 @@ export async function buildServer(config: Config): Promise<ServerContext> {
       claudePath: config.CLAUDE_PATH,
       claudeModel: config.CLAUDE_MODEL,
       claudeTimeoutMs: config.CLAUDE_TIMEOUT_MS,
+      workingDir: config.JARVIS_WORKING_DIR,
       corpusCallosumEnabled: config.CORPUS_CALLOSUM_ENABLED,
       gatewayUrl: config.OPENCLAW_GATEWAY_URL,
       gatewayToken: config.OPENCLAW_GATEWAY_TOKEN,

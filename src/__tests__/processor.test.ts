@@ -77,6 +77,7 @@ function makeProcessor(opts: {
       claudePath: '/usr/bin/claude',
       claudeModel: 'sonnet',
       claudeTimeoutMs: 120_000,
+      workingDir: '/tmp',
       historyPath,
       corpusCallosumEnabled: opts.corpusCallosumEnabled ?? true,
       gatewayUrl: 'http://127.0.0.1:18789',
@@ -130,6 +131,7 @@ describe('MessageProcessor', () => {
         claudePath: '/usr/bin/claude',
         claudeModel: 'sonnet',
         claudeTimeoutMs: 120_000,
+      workingDir: '/tmp',
         historyPath: join(tmpDir, 'history.jsonl'),
         corpusCallosumEnabled: false, // default existing tests to single-brain
         gatewayUrl: 'http://127.0.0.1:18789',

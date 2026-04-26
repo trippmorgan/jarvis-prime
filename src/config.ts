@@ -32,6 +32,12 @@ const baseSchema = z.object({
   TRIPP_CHAT_ID: z.string().default("8048875001"),
   WORKSPACE_DIR: z.string().default("/home/tripp/.openclaw/workspace"),
   DELIVERY_QUEUE_DIR: z.string().default("/home/tripp/.openclaw/delivery-queue"),
+  // Bridge process working directory — passed as cwd to every Claude spawn and
+  // used to derive the conversation history path. Override on non-SuperServer
+  // ports (e.g. JARVIS_WORKING_DIR=/home/jarvisagent/.openclaw/workspace/jarvis-prime/
+  // on Argus, /home/djjarvis/... on Pretoria) to keep the harness on a clean
+  // upstream tag without per-node source forks.
+  JARVIS_WORKING_DIR: z.string().default("/home/tripp/.openclaw/workspace/jarvis-prime/"),
   CORPUS_CALLOSUM_ENABLED: boolFromEnv(true),
   OPENCLAW_CHAT_MODEL_RIGHT: z.string().default("gpt-5.4 codex"),
   // Dual-brain orchestrations (Claude + GPT-Codex via corpus callosum) routinely

@@ -115,6 +115,7 @@ function makeE2EProcessor(opts: {
       claudePath: '/usr/bin/claude',
       claudeModel: 'sonnet',
       claudeTimeoutMs: 120_000,
+      workingDir: '/tmp',
       historyPath,
       corpusCallosumEnabled: opts.corpusCallosumEnabled ?? true,
       gatewayUrl: 'http://127.0.0.1:18789',

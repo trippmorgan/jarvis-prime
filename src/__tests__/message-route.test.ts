@@ -25,6 +25,7 @@ function makeProcessor(): MessageProcessor {
       claudePath: '/usr/bin/claude',
       claudeModel: 'sonnet',
       claudeTimeoutMs: 120_000,
+      workingDir: '/tmp',
       historyPath: join(tmpDir, 'history.jsonl'),
     },
     deliverMock,

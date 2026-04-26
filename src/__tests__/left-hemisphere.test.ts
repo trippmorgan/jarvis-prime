@@ -28,6 +28,7 @@ function buildClient(overrides: Partial<LeftHemisphereConfig> = {}) {
   const config: LeftHemisphereConfig = {
     claudePath: overrides.claudePath ?? "/home/tripp/.local/bin/claude",
     model: overrides.model ?? "sonnet",
+    workingDir: overrides.workingDir ?? "/tmp",
     logger,
     spawner,
     ...overrides,
