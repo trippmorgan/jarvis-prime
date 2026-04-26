@@ -73,11 +73,11 @@ describe('loadConfig defaults', () => {
     expect(cfg.OPENCLAW_CHAT_MODEL_RIGHT).toBe('gpt-5.4 codex')
   })
 
-  it('defaults CORPUS_CALLOSUM_TIMEOUT_MS to 240000', () => {
+  it('defaults CORPUS_CALLOSUM_TIMEOUT_MS to 1200000', () => {
     process.env.OPENCLAW_GATEWAY_URL = 'http://127.0.0.1:18789'
     process.env.OPENCLAW_GATEWAY_TOKEN = 'test-token'
     const cfg = loadConfig()
-    expect(cfg.CORPUS_CALLOSUM_TIMEOUT_MS).toBe(240_000)
+    expect(cfg.CORPUS_CALLOSUM_TIMEOUT_MS).toBe(1_200_000)
   })
 
   it('defaults JARVIS_EVOLVING_MESSAGE_ENABLED to true (W6-T1)', () => {
