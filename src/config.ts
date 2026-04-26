@@ -38,6 +38,13 @@ const baseSchema = z.object({
   // on Argus, /home/djjarvis/... on Pretoria) to keep the harness on a clean
   // upstream tag without per-node source forks.
   JARVIS_WORKING_DIR: z.string().default("/home/tripp/.openclaw/workspace/jarvis-prime/"),
+  // Display name of this node — fed into Claude's system context every turn so
+  // the model knows it's Argus / DJ Jarvis / etc, not always Prime.
+  JARVIS_NODE_NAME: z.string().default("Jarvis Prime"),
+  // Bot username (without @) this node serves on Telegram. Used in the system
+  // context and the startup log line. Override per node so Argus advertises
+  // @Jarvis_Argus_Sentry_Bot and DJ Jarvis advertises @djjarvis_bot.
+  TELEGRAM_BOT_USERNAME: z.string().default("trippassistant_bot"),
   CORPUS_CALLOSUM_ENABLED: boolFromEnv(true),
   OPENCLAW_CHAT_MODEL_RIGHT: z.string().default("gpt-5.4 codex"),
   // Dual-brain orchestrations (Claude + GPT-Codex via corpus callosum) routinely

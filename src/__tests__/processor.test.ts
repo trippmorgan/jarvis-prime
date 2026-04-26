@@ -78,6 +78,8 @@ function makeProcessor(opts: {
       claudeModel: 'sonnet',
       claudeTimeoutMs: 120_000,
       workingDir: '/tmp',
+      nodeName: 'Jarvis Prime',
+      botUsername: 'trippassistant_bot',
       historyPath,
       corpusCallosumEnabled: opts.corpusCallosumEnabled ?? true,
       gatewayUrl: 'http://127.0.0.1:18789',
@@ -132,6 +134,8 @@ describe('MessageProcessor', () => {
         claudeModel: 'sonnet',
         claudeTimeoutMs: 120_000,
       workingDir: '/tmp',
+      nodeName: 'Jarvis Prime',
+      botUsername: 'trippassistant_bot',
         historyPath: join(tmpDir, 'history.jsonl'),
         corpusCallosumEnabled: false, // default existing tests to single-brain
         gatewayUrl: 'http://127.0.0.1:18789',

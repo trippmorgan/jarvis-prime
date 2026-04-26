@@ -95,6 +95,22 @@ describe('loadConfig defaults', () => {
     expect(cfg.JARVIS_WORKING_DIR).toBe('/home/jarvisagent/.openclaw/workspace/jarvis-prime/')
   })
 
+  it('defaults JARVIS_NODE_NAME to "Jarvis Prime" and reads override', () => {
+    process.env.OPENCLAW_GATEWAY_URL = 'http://127.0.0.1:18789'
+    process.env.OPENCLAW_GATEWAY_TOKEN = 'test-token'
+    expect(loadConfig().JARVIS_NODE_NAME).toBe('Jarvis Prime')
+    process.env.JARVIS_NODE_NAME = 'Argus'
+    expect(loadConfig().JARVIS_NODE_NAME).toBe('Argus')
+  })
+
+  it('defaults TELEGRAM_BOT_USERNAME and reads override', () => {
+    process.env.OPENCLAW_GATEWAY_URL = 'http://127.0.0.1:18789'
+    process.env.OPENCLAW_GATEWAY_TOKEN = 'test-token'
+    expect(loadConfig().TELEGRAM_BOT_USERNAME).toBe('trippassistant_bot')
+    process.env.TELEGRAM_BOT_USERNAME = 'Jarvis_Argus_Sentry_Bot'
+    expect(loadConfig().TELEGRAM_BOT_USERNAME).toBe('Jarvis_Argus_Sentry_Bot')
+  })
+
   it('defaults JARVIS_EVOLVING_MESSAGE_ENABLED to true (W6-T1)', () => {
     process.env.CORPUS_CALLOSUM_ENABLED = 'false'
     const cfg = loadConfig()

@@ -68,7 +68,6 @@ export interface Tier0Config {
 // cost of occasional misroutes (which are forgiven — single-brain handles them
 // fine, just without the deep deliberation).
 const DEFAULT_THRESHOLD = 0.5
-const DEFAULT_CACHE_DIR = "/home/tripp/.openclaw/workspace/jarvis-prime/.data/xenova-cache"
 const MODEL_ID = "Xenova/all-MiniLM-L6-v2"
 
 export class Tier0Classifier {
@@ -87,7 +86,11 @@ export class Tier0Classifier {
 
   constructor(config: Tier0Config = {}) {
     this.threshold = config.threshold ?? DEFAULT_THRESHOLD
-    this.cacheDir = config.cacheDir ?? DEFAULT_CACHE_DIR
+    // Fall back to a process-local cache when no cacheDir is wired in. The
+    // bridge (processor.ts) derives this from JARVIS_WORKING_DIR; direct test
+    // constructions get a stable per-process default that won't poison
+    // /home/tripp on non-SuperServer hosts.
+    this.cacheDir = config.cacheDir ?? `${process.cwd()}/.data/xenova-cache`
     this.logger = config.logger
     this.seeds = config.seeds ?? TIER0_SEEDS_FLAT
     this.encoderFactory = config.encoderFactory ?? defaultEncoderFactory(this.cacheDir)

@@ -201,6 +201,8 @@ function makeRouterProcessor(opts: {
       claudeModel: "sonnet",
       claudeTimeoutMs: 120_000,
       workingDir: '/tmp',
+      nodeName: 'Jarvis Prime',
+      botUsername: 'trippassistant_bot',
       historyPath,
       corpusCallosumEnabled: true,
       gatewayUrl: "http://127.0.0.1:18789",

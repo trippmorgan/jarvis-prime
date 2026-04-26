@@ -94,6 +94,10 @@ export interface ProcessorConfig {
   claudeTimeoutMs: number
   /** Bridge working directory — cwd for every Claude spawn, anchor for history path. */
   workingDir: string
+  /** Display name of this node — injected into Claude's system context. */
+  nodeName: string
+  /** Telegram bot username (no @) this node serves. */
+  botUsername: string
   historyPath?: string
   /** Dual-brain kill-switch. When false, every message takes the single-brain path. */
   corpusCallosumEnabled: boolean
@@ -196,7 +200,10 @@ export class MessageProcessor {
     this.history = new ConversationHistory(
       config.historyPath ?? join(config.workingDir, HISTORY_RELATIVE_PATH),
     )
-    this.promptBuilder = new PromptBuilder(this.history)
+    this.promptBuilder = new PromptBuilder(this.history, {
+      nodeName: config.nodeName,
+      botUsername: config.botUsername,
+    })
     this.queue = new MessageQueue((msg) => this.process(msg))
     this.modeState = new ModeState(config.defaultMode ?? 'single')
 
@@ -251,6 +258,7 @@ export class MessageProcessor {
     } else if (config.tier0Enabled === true && config.corpusCallosumEnabled) {
       this.tier0Classifier = new Tier0Classifier({
         threshold: config.tier0Threshold,
+        cacheDir: join(config.workingDir, '.data', 'xenova-cache'),
         logger: this.log,
       })
     } else {

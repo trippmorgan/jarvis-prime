@@ -39,7 +39,7 @@ try {
     poller.start().catch((err) => {
       server.log.error({ error: err instanceof Error ? err.message : String(err) }, 'Telegram poller crashed');
     });
-    server.log.info('Telegram poller started — listening for messages from @trippassistant_bot');
+    server.log.info(`Telegram poller started — listening for messages from @${config.TELEGRAM_BOT_USERNAME}`);
   } else {
     server.log.warn('No TELEGRAM_BOT_TOKEN — running in HTTP-only mode (no Telegram polling)');
   }

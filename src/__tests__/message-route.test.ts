@@ -26,6 +26,8 @@ function makeProcessor(): MessageProcessor {
       claudeModel: 'sonnet',
       claudeTimeoutMs: 120_000,
       workingDir: '/tmp',
+      nodeName: 'Jarvis Prime',
+      botUsername: 'trippassistant_bot',
       historyPath: join(tmpDir, 'history.jsonl'),
     },
     deliverMock,

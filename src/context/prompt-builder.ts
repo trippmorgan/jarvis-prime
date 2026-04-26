@@ -5,12 +5,23 @@ import type { ConversationHistory } from './history.js'
 const SKILLS_DIR = '/home/tripp/.claude/skills'
 const RULES_DIR = '/home/tripp/.claude/rules'
 
+export interface PromptBuilderConfig {
+  /** Display name of this node (e.g. "Jarvis Prime", "Argus", "DJ Jarvis"). */
+  nodeName?: string
+  /** Telegram bot username this node serves (without @). */
+  botUsername?: string
+}
+
 export class PromptBuilder {
   private skillSummary: string = ''
   private readonly history: ConversationHistory
+  private readonly nodeName: string
+  private readonly botUsername: string
 
-  constructor(history: ConversationHistory) {
+  constructor(history: ConversationHistory, config: PromptBuilderConfig = {}) {
     this.history = history
+    this.nodeName = config.nodeName ?? 'Jarvis Prime'
+    this.botUsername = config.botUsername ?? 'trippassistant_bot'
     this.loadSkills()
   }
 
@@ -29,7 +40,7 @@ export class PromptBuilder {
 
   private getSystemContext(): string {
     return `## Context
-You are Jarvis Prime, responding to Tripp via Telegram (@trippassistant_bot).
+You are ${this.nodeName}, responding to Tripp via Telegram (@${this.botUsername}).
 Keep responses concise — this is Telegram, not a terminal. Aim for 1-3 short paragraphs max unless the task demands more.
 You have full SSH access to the Jarvis network. Execute commands directly when asked — don't just describe what you would do.
 
