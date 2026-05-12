@@ -1,12 +1,18 @@
 import { loadConfig } from "./config.js";
 import { buildServer } from "./server.js";
+import { KernelRegister } from "./lieutenant/kernel-register.js";
 
 const config = loadConfig();
 const { server, processor, poller, reporter } = await buildServer(config);
 
+// W9 — register jarvis-prime as a Tier-2 telegram-bot row in the jarvis-os
+// kernel registry (spec §6.2). Heartbeats every 60s; deregisters on SIGTERM.
+const kernel = new KernelRegister(server.log);
+
 const shutdown = async (signal: string) => {
   server.log.info({ signal }, "Shutting down");
   poller?.stop();
+  await kernel.deregister().catch(() => undefined);
   await server.close();
   // W8.8 — drain in-flight Langfuse traces before exit. NoopReporter
   // resolves immediately when the feature is disabled.
@@ -43,6 +49,20 @@ try {
   } else {
     server.log.warn('No TELEGRAM_BOT_TOKEN — running in HTTP-only mode (no Telegram polling)');
   }
+
+  // Register with jarvis-os kernel after listen so the row reflects the live port.
+  void kernel.register({
+    kind: "telegram-bot",
+    node: "prime",
+    capabilities: poller
+      ? ["telegram-poll", "telegram-deliver", "briefing", "router"]
+      : ["briefing", "router"],
+    port: config.PORT,
+    metadata: {
+      bot_username: config.TELEGRAM_BOT_USERNAME,
+      poller_enabled: Boolean(poller),
+    },
+  }).then(() => kernel.startHeartbeatLoop());
 } catch (err) {
   server.log.error(err);
   process.exit(1);
