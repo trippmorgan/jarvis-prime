@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.js";
 import { buildServer } from "./server.js";
 import { KernelRegister } from "./lieutenant/kernel-register.js";
+import { setAgentIdProvider } from "./lieutenant/kernel-events.js";
 
 const config = loadConfig();
 const { server, processor, poller, reporter } = await buildServer(config);
@@ -51,6 +52,8 @@ try {
   }
 
   // Register with jarvis-os kernel after listen so the row reflects the live port.
+  // Wire kernel-events.emitKernelEvent() to use this agent_id once available.
+  setAgentIdProvider(() => kernel.getSelfId());
   void kernel.register({
     kind: "telegram-bot",
     node: "prime",

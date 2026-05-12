@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from 'fastify'
 import { join } from 'node:path'
 import { spawnClaude } from '../claude/spawner.js'
 import { spawnClaudeStream } from '../claude/spawner-stream.js'
+import type { SpawnResult } from '../claude/types.js'
 import { formatStreamEvent, type StreamEvent } from '../claude/stream-formatter.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
@@ -44,11 +45,47 @@ import {
   TelegramResponder,
   type TelegramSendSurface,
 } from '../telegram/responder.js'
+import {
+  emitTelegramInbound,
+  emitTelegramOutbound,
+} from '../lieutenant/kernel-events.js'
 
 const ACK_DELAY_MS = 8_000
 const HARD_TIMEOUT_MS = 600_000
 const TELEGRAM_MAX_LENGTH = 4096
 const HISTORY_RELATIVE_PATH = '.data/conversation-history.jsonl'
+
+/**
+ * Build the langfuse-shaped usage/cost/model overrides from a SpawnResult.
+ * Returns an empty object when the CLI didn't emit usage data so the existing
+ * `.end()` payload stays unchanged. Cost arrives pre-computed from the CLI
+ * (it knows cache vs standard pricing), so we pass it via `costDetails` rather
+ * than relying on langfuse's per-model price table.
+ */
+function buildLangfuseUsage(result: SpawnResult): Record<string, unknown> {
+  if (!result.usage && result.costUsd === undefined && !result.modelResolved) {
+    return {}
+  }
+  const out: Record<string, unknown> = {}
+  if (result.modelResolved) out.model = result.modelResolved
+  if (result.usage) {
+    out.usageDetails = {
+      input: result.usage.inputTokens,
+      output: result.usage.outputTokens,
+      cache_creation_input: result.usage.cacheCreationInputTokens,
+      cache_read_input: result.usage.cacheReadInputTokens,
+      total:
+        result.usage.inputTokens +
+        result.usage.outputTokens +
+        result.usage.cacheCreationInputTokens +
+        result.usage.cacheReadInputTokens,
+    }
+  }
+  if (typeof result.costUsd === 'number') {
+    out.costDetails = { total: result.costUsd }
+  }
+  return out
+}
 
 export interface DeliverFn {
   (chatId: string, text: string): Promise<void>
@@ -191,6 +228,8 @@ export class MessageProcessor {
   private readonly tier0Classifier: Tier0Classifier | null
   private readonly reporter: Reporter
   private readonly liveTraces: Map<string, TraceHandle> = new Map()
+  /** W11: messageId → chatId, so emitProcessEnd can tee outbound events. */
+  private readonly chatIdByMessageId: Map<string, string> = new Map()
   private readonly modeState: ModeState
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
@@ -367,6 +406,17 @@ export class MessageProcessor {
       },
       'history user appended',
     )
+
+    // W11: tee into kernel events so the shell Discussion tab can render this
+    // inbound turn. Fire-and-forget; kernel-down → silent skip.
+    this.chatIdByMessageId.set(msg.id, msg.chatId)
+    emitTelegramInbound({
+      chatId: msg.chatId,
+      userId: msg.userId,
+      messageId: msg.id,
+      text: msg.text,
+      hasMedia: false,
+    })
 
     // W8.8 — open a Langfuse root trace for this turn. NoopReporter when
     // disabled, so this costs nothing in the dev/test path. Stored in the
@@ -721,6 +771,7 @@ export class MessageProcessor {
           timedOut: result.timedOut,
           fastLane,
         },
+        ...buildLangfuseUsage(result),
       })
 
       this.log.info(
@@ -873,6 +924,7 @@ export class MessageProcessor {
           stderrLength: result.stderr.length,
           timedOut: result.timedOut,
         },
+        ...buildLangfuseUsage(result),
       })
 
       this.log.info(
@@ -1397,6 +1449,15 @@ export class MessageProcessor {
       },
       'delivery end',
     )
+
+    // W11: tee outbound bubble into kernel events.
+    emitTelegramOutbound({
+      chatId,
+      messageId,
+      text,
+      deliveryMs: Date.now() - start,
+      outcome,
+    })
   }
 
   /** Shared error classification + logging for dual-brain paths. */
@@ -1450,6 +1511,20 @@ export class MessageProcessor {
       },
       'process end',
     )
+
+    // W11: tee outbound reply into kernel events. Covers BOTH evolving and
+    // legacy UX paths (the original delivery_end hooks only saw legacy).
+    const chatId = this.chatIdByMessageId.get(messageId)
+    if (chatId && output) {
+      emitTelegramOutbound({
+        chatId,
+        messageId,
+        text: output,
+        deliveryMs: totalPipelineMs,
+        outcome: outcome === 'success' ? 'success' : 'error',
+      })
+    }
+    this.chatIdByMessageId.delete(messageId)
 
     // W8.8 — finalise the Langfuse trace for this turn. Safe when reporter
     // is a noop (handle's update/end are no-ops). Output is redacted on the
@@ -1510,6 +1585,15 @@ export class MessageProcessor {
       },
       'delivery end',
     )
+
+    // W11: tee outbound bubble into kernel events.
+    emitTelegramOutbound({
+      chatId,
+      messageId,
+      text,
+      deliveryMs: Date.now() - start,
+      outcome,
+    })
   }
 }
 
