@@ -48,6 +48,11 @@ import {
 import {
   emitTelegramInbound,
   emitTelegramOutbound,
+  startOrReuseSession,
+  heartbeatSession,
+  parseMentions,
+  emitRoomBridge,
+  getAgentId,
 } from '../lieutenant/kernel-events.js'
 
 const ACK_DELAY_MS = 8_000
@@ -230,6 +235,8 @@ export class MessageProcessor {
   private readonly liveTraces: Map<string, TraceHandle> = new Map()
   /** W11: messageId → chatId, so emitProcessEnd can tee outbound events. */
   private readonly chatIdByMessageId: Map<string, string> = new Map()
+  /** W13: messageId → kernel session id (cluster), so outbound emits get tagged + heartbeat fires on process_end. */
+  private readonly sessionIdByMessageId: Map<string, string> = new Map()
   private readonly modeState: ModeState
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
@@ -410,13 +417,47 @@ export class MessageProcessor {
     // W11: tee into kernel events so the shell Discussion tab can render this
     // inbound turn. Fire-and-forget; kernel-down → silent skip.
     this.chatIdByMessageId.set(msg.id, msg.chatId)
+
+    // W13: cluster inbound turns into a session (45-min idle window). Awaited
+    // so the inbound event gets tagged with session_id on the first POST.
+    // Fail-soft: returns null if the kernel is down or agent isn't registered yet.
+    const selfAgentId = getAgentId()
+    let sessionId: string | null = null
+    if (selfAgentId) {
+      sessionId = await startOrReuseSession({
+        agent_id: selfAgentId,
+        intent: msg.text.slice(0, 80),
+        channel: 'telegram',
+        chat_id: msg.chatId,
+        owner: 'tripp',
+        idle_cluster_min: 45,
+      })
+      if (sessionId) this.sessionIdByMessageId.set(msg.id, sessionId)
+    }
+
     emitTelegramInbound({
       chatId: msg.chatId,
       userId: msg.userId,
       messageId: msg.id,
       text: msg.text,
       hasMedia: false,
+      sessionId,
     })
+
+    // W13: @mention bridge — if Tripp dictated `@dj-jarvis ...` etc., fire a
+    // parallel room-channel kernel event so the W12 room-listener on the
+    // mentioned node can pick it up. Fire-and-forget; independent of the
+    // normal Telegram reply path.
+    const mentions = parseMentions(msg.text)
+    if (mentions.length > 0) {
+      emitRoomBridge({
+        chatId: msg.chatId,
+        fromUser: msg.userId ?? 'tripp',
+        text: msg.text,
+        mentions,
+        sessionId,
+      })
+    }
 
     // W8.8 — open a Langfuse root trace for this turn. NoopReporter when
     // disabled, so this costs nothing in the dev/test path. Stored in the
@@ -1457,6 +1498,7 @@ export class MessageProcessor {
       text,
       deliveryMs: Date.now() - start,
       outcome,
+      sessionId: this.sessionIdByMessageId.get(messageId) ?? null,
     })
   }
 
@@ -1515,6 +1557,7 @@ export class MessageProcessor {
     // W11: tee outbound reply into kernel events. Covers BOTH evolving and
     // legacy UX paths (the original delivery_end hooks only saw legacy).
     const chatId = this.chatIdByMessageId.get(messageId)
+    const sessionId = this.sessionIdByMessageId.get(messageId) ?? null
     if (chatId && output) {
       emitTelegramOutbound({
         chatId,
@@ -1522,9 +1565,14 @@ export class MessageProcessor {
         text: output,
         deliveryMs: totalPipelineMs,
         outcome: outcome === 'success' ? 'success' : 'error',
+        sessionId,
       })
     }
+    // W13: bump session activity so the 45-min idle cluster doesn't lapse
+    // mid-conversation while Claude is still spawning replies.
+    if (sessionId) heartbeatSession(sessionId)
     this.chatIdByMessageId.delete(messageId)
+    this.sessionIdByMessageId.delete(messageId)
 
     // W8.8 — finalise the Langfuse trace for this turn. Safe when reporter
     // is a noop (handle's update/end are no-ops). Output is redacted on the
@@ -1593,6 +1641,7 @@ export class MessageProcessor {
       text,
       deliveryMs: Date.now() - start,
       outcome,
+      sessionId: this.sessionIdByMessageId.get(messageId) ?? null,
     })
   }
 }
