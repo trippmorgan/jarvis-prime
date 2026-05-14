@@ -4,6 +4,7 @@ import { MessageProcessor } from "./bridge/processor.js";
 import { registerMessageRoute } from "./routes/message.js";
 import { TelegramPoller } from "./telegram/poller.js";
 import { makeReporter, type Reporter } from "./observability/langfuse-reporter.js";
+import { createTelegramOrchestratorHook } from "./orchestrator/telegram-hook.js";
 
 export interface ServerContext {
   server: FastifyInstance
@@ -30,13 +31,25 @@ export async function buildServer(config: Config): Promise<ServerContext> {
     logger: server.log,
   });
 
+  // W17: orchestrator hook intercepts non-chat intents (query/workflow/
+  // status) and runs them through the command layer. Chat messages fall
+  // through to MessageProcessor unchanged.
+  const orchestratorHook = createTelegramOrchestratorHook({
+    deliver: async (chatId, text) => {
+      if (poller) await poller.sendMessage(chatId, text, 'Markdown')
+    },
+    onChat: (chatId, text, userId) => {
+      processor.submit(chatId, text, userId)
+    },
+  })
+
   const poller = config.TELEGRAM_BOT_TOKEN
     ? new TelegramPoller({
         botToken: config.TELEGRAM_BOT_TOKEN,
         allowedChatIds: [config.TRIPP_CHAT_ID],
         pollTimeoutSecs: 30,
         onMessage: async (chatId, text, userId) => {
-          processor.submit(chatId, text, userId)
+          await orchestratorHook(chatId, text, userId)
         },
         logger: server.log,
       })
