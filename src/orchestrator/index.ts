@@ -41,7 +41,8 @@ export async function orchestrate(
   // For class='status' the plan's steps[] is empty by design — fill it
   // with one health-check per alive lieutenant via the fan-out helper.
   if (klass === 'status' && plan.steps.length === 0) {
-    plan.steps = await statusFanOutSteps()
+    const steps = await statusFanOutSteps()
+    plan.steps.push(...steps)
   }
 
   const events: ExecEvent[] = []
@@ -91,6 +92,21 @@ function composeFinalReply(plan: { summary: string }, events: ExecEvent[], klass
     ].join('\n')
   }
 
+  // Status class always renders the table, even when some lieutenants
+  // timed out — a partial table is more useful than an abort message.
+  if (klass === 'status') {
+    const rows: ReturnType<typeof parseStatusRow>[] = []
+    for (const ev of completed) {
+      rows.push(parseStatusRow(ev.step?.target ?? '?', (ev.result as Record<string, unknown>) ?? null))
+    }
+    for (const ev of failed) {
+      rows.push(parseStatusRow(ev.step?.target ?? '?', { ok: false, error: ev.reason }))
+    }
+    if (rows.length === 0) return plan.summary
+    return renderStatusTable(rows)
+  }
+
+  // Non-status: pause-on-failure remains the SPEC-locked behavior.
   if (failed.length > 0) {
     const f = failed[0]
     return [
@@ -101,14 +117,6 @@ function composeFinalReply(plan: { summary: string }, events: ExecEvent[], klass
 
   if (completed.length === 0) {
     return plan.summary
-  }
-
-  // For class='status', render a table instead of a step-by-step list.
-  if (klass === 'status') {
-    const rows = completed.map((ev) =>
-      parseStatusRow(ev.step?.target ?? '?', (ev.result as Record<string, unknown>) ?? null),
-    )
-    return renderStatusTable(rows)
   }
 
   const lines = [plan.summary, '']

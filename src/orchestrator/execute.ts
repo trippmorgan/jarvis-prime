@@ -153,7 +153,18 @@ export async function* executePlan(
     result: { summary: plan.summary, steps: plan.steps.map((s) => ({ target: s.target, command_type: s.command_type })) },
   }
 
+  // For class='status' fan-out: emit ALL commands first, then poll for
+  // all results. This is semantically the right model — a status table
+  // wants every lieutenant's answer, not "first one that times out wins".
+  // It's also faster (parallel) and doesn't abort the table on one
+  // unreachable node.
+  if (plan.class === 'status') {
+    yield* executeFanOut(plan, sessionId, pollTimeoutMs)
+    return
+  }
+
   let stepNumber = 0
+  let allOk = true
   for (const step of plan.steps) {
     stepNumber += 1
     const emit = await emitCommand(step, sessionId, DEFAULT_DEADLINE_SEC)
@@ -193,5 +204,56 @@ export async function* executePlan(
       return
     }
   }
-  yield { kind: 'orchestration_done', result: { completed: true } }
+  yield { kind: 'orchestration_done', result: { completed: allOk } }
+}
+
+/**
+ * Status fan-out: dispatch all in parallel, gather all results
+ * (success or failure), never abort the table for a partial outage.
+ * Uses a tighter per-step timeout (15s) since we're waiting on the
+ * slowest lieutenant.
+ */
+async function* executeFanOut(
+  plan: Plan,
+  sessionId: string | undefined,
+  perStepTimeoutMs: number = 15_000,
+): AsyncIterable<ExecEvent> {
+  // Emit all commands first.
+  const dispatched: Array<{ step: typeof plan.steps[number]; envelopeId: string; stepNumber: number } | { step: typeof plan.steps[number]; failed: true; reason: string; stepNumber: number }> = []
+  let n = 0
+  for (const step of plan.steps) {
+    n += 1
+    const emit = await emitCommand(step, sessionId, DEFAULT_DEADLINE_SEC)
+    if (!emit) {
+      dispatched.push({ step, failed: true, reason: 'emit-failed', stepNumber: n })
+      yield { kind: 'step_failed', step, step_number: n, total_steps: plan.steps.length, reason: 'emit-failed' }
+      continue
+    }
+    dispatched.push({ step, envelopeId: emit.envelope.id, stepNumber: n })
+    yield { kind: 'step_dispatched', step, step_number: n, total_steps: plan.steps.length, envelope_id: emit.envelope.id }
+  }
+
+  // Poll all in parallel.
+  const settled = await Promise.all(
+    dispatched.map(async (d) => {
+      if ('failed' in d) return d
+      const polled = await pollForResult(d.envelopeId, perStepTimeoutMs)
+      return { ...d, polled }
+    }),
+  )
+
+  let okCount = 0
+  for (const r of settled) {
+    if ('failed' in r) continue
+    const polled = r.polled
+    if (polled.kind === 'result') {
+      okCount += 1
+      yield { kind: 'step_complete', step: r.step, step_number: r.stepNumber, total_steps: plan.steps.length, envelope_id: r.envelopeId, result: polled.result }
+    } else if (polled.kind === 'failed') {
+      yield { kind: 'step_failed', step: r.step, step_number: r.stepNumber, total_steps: plan.steps.length, envelope_id: r.envelopeId, reason: polled.reason }
+    } else {
+      yield { kind: 'step_failed', step: r.step, step_number: r.stepNumber, total_steps: plan.steps.length, envelope_id: r.envelopeId, reason: 'poll-timeout' }
+    }
+  }
+  yield { kind: 'orchestration_done', result: { completed: okCount === plan.steps.length, ok_count: okCount, total: plan.steps.length } }
 }

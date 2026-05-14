@@ -1,3 +1,7 @@
+// Load .env BEFORE any module reads process.env at module-init time.
+// W17 orchestrator constants (KERNEL_URL / KERNEL_TOKEN) are evaluated
+// on import; dotenv must run first.
+import "dotenv/config";
 import { loadConfig } from "./config.js";
 import { buildServer } from "./server.js";
 import { KernelRegister } from "./lieutenant/kernel-register.js";
