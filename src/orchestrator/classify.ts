@@ -26,6 +26,12 @@ const RULES: ClassRule[] = [
   { pattern: /\b(athena|chrome[-\s]?cdp|ollama|playoutone|music1)\b.*\b(debug|fix|status|check|inspect|investigat)/i, klass: 'workflow' },
   { pattern: /\b(debug|fix|inspect|investigat)\w*\s+(athena|chrome[-\s]?cdp|ollama|playoutone|music1|mcp)\b/i, klass: 'workflow' },
 
+  // W17.2 — Frank workspace / experiments. Two word orders covered:
+  //   "show me frank experiments" / "list frank experiments" / "utilizing frank, read franks workspace experiments"
+  //   "experiments on frank" / "experiments in frank workspace"
+  { pattern: /\b(frank|voldemort)\b.*\b(experiments?|workspace|methodology)\b/i, klass: 'workflow' },
+  { pattern: /\b(experiments?|workspace|methodology)\b.*\b(on|in|from)\s+(frank|voldemort)\b/i, klass: 'workflow' },
+
   // Simple plumbing checks
   { pattern: /\b(inspect|list)\s+(mcp|servers?|agents?)\b/i, klass: 'workflow' },
 ]

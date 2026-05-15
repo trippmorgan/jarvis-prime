@@ -89,6 +89,7 @@ export async function buildServer(config: Config): Promise<ServerContext> {
       gatewayToken: config.OPENCLAW_GATEWAY_TOKEN,
       rightModel: config.OPENCLAW_CHAT_MODEL_RIGHT,
       corpusCallosumTimeoutMs: config.CORPUS_CALLOSUM_TIMEOUT_MS,
+      leftHemisphereFastTimeoutMs: config.LEFT_HEMISPHERE_FAST_TIMEOUT_MS,
       clinicalOverride: config.CORPUS_CLINICAL_OVERRIDE,
       evolvingMessageEnabled: config.JARVIS_EVOLVING_MESSAGE_ENABLED,
       rightBrainAgentEnabled: config.RIGHT_BRAIN_AGENT_ENABLED,

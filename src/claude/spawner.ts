@@ -61,6 +61,16 @@ export async function spawnClaude(
     // Enforce timeout
     timer = setTimeout(() => {
       timedOut = true;
+      // W17.2 — kill descendant SSH/tool processes too. SIGKILL on the
+      // parent Claude CLI doesn't propagate to grandchildren; orphaned
+      // `ssh <node>` operations would continue running until the remote
+      // command finished. Best-effort: pkill-by-parent. Detached from
+      // result resolution — we still resolve on the child's `close`.
+      if (child.pid !== undefined) {
+        try {
+          spawn("pkill", ["-9", "-P", String(child.pid)], { stdio: "ignore" }).on("error", () => undefined);
+        } catch { /* swallow */ }
+      }
       child.kill("SIGKILL");
     }, timeoutMs);
 

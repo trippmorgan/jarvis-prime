@@ -53,6 +53,7 @@ import {
   parseMentions,
   emitRoomBridge,
   getAgentId,
+  emitKernelEvent,
 } from '../lieutenant/kernel-events.js'
 
 const ACK_DELAY_MS = 8_000
@@ -147,6 +148,10 @@ export interface ProcessorConfig {
   gatewayToken: string
   rightModel: string
   corpusCallosumTimeoutMs: number
+  /** W17.2 — hard cap on a single dual-brain Claude CLI spawn. Default 90_000.
+   *  Replaces corpusCallosumTimeoutMs as the live knob; the older one is
+   *  retained for back-compat reads but no longer plumbed into the spawn. */
+  leftHemisphereFastTimeoutMs?: number
   /** When true, force clinical bypass for all messages (explicit caller override). */
   clinicalOverride?: boolean
   /**
@@ -263,7 +268,10 @@ export class MessageProcessor {
         workingDir: config.workingDir,
         logger: this.log,
       })
-      const timeoutMs = config.corpusCallosumTimeoutMs
+      // W17.2 — fast cap supersedes the legacy CORPUS_CALLOSUM_TIMEOUT_MS env.
+      // A 90s default kills the 10-min Telegram dead-air that triggered W17.2
+      // (live bug: "left hemisphere timed out after 600000ms" × 3 retries).
+      const timeoutMs = config.leftHemisphereFastTimeoutMs ?? 90_000
       const routerEnabled = config.routerEnabled === true
       // Skill shim is only meaningful in router mode; lazy-construct a default
       // when routerEnabled is on and the caller didn't inject one.
@@ -1504,6 +1512,31 @@ export class MessageProcessor {
 
   /** Shared error classification + logging for dual-brain paths. */
   private formatDualBrainError(err: unknown, messageId: string): string {
+    const hemisphere =
+      err instanceof LeftHemisphereError
+        ? 'left'
+        : err instanceof RightHemisphereError
+          ? 'right'
+          : err instanceof IntegrationError
+            ? 'integration'
+            : 'other'
+    const errText = err instanceof Error ? err.message : String(err)
+    // W17.2 — emit to kernel /events so the GUI activity feed sees the
+    // failure. Without this, the only signal was a Telegram error message
+    // and a buried PM2 log line.
+    const sessionId = this.sessionIdByMessageId.get(messageId) ?? undefined
+    const isTimeout = /timed out/i.test(errText)
+    emitKernelEvent({
+      severity: 'error',
+      body: `dual-brain ${hemisphere} ${isTimeout ? 'timeout' : 'failure'}: ${errText.slice(0, 200)}`,
+      metadata: {
+        event: 'dual_brain_failed',
+        hemisphere,
+        messageId,
+        ...(sessionId ? { session_id: sessionId } : {}),
+        is_timeout: isTimeout,
+      },
+    })
     if (err instanceof LeftHemisphereError) {
       this.log.error(
         { event: 'dual_brain_failed', hemisphere: 'left', messageId, error: err.message },
@@ -1525,12 +1558,11 @@ export class MessageProcessor {
       )
       return `Integration failed after retry: ${err.message}`
     }
-    const msgText = err instanceof Error ? err.message : String(err)
     this.log.error(
-      { event: 'dual_brain_failed', messageId, error: msgText },
+      { event: 'dual_brain_failed', messageId, error: errText },
       'dual-brain failed',
     )
-    return `Internal error: ${msgText}`
+    return `Internal error: ${errText}`
   }
 
   private emitProcessEnd(

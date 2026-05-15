@@ -114,6 +114,59 @@ const WORKFLOW_PLANS: PatternToPlan[] = [
       ],
     }),
   },
+
+  // W17.2 — "read frank experiment <name>" / "show frank experiment <name>".
+  // More specific than the bare list pattern below; must come first.
+  {
+    pattern: /\b(?:read|show|fetch|open|details?\s+(?:of|on)?)\s+(?:\w+\s+)?(?:frank|voldemort)\s+experiment(?:s)?\s+(?<name>[\w][\w\-]+)/i,
+    build: (m) => {
+      const name = (m.groups?.name as string)
+      return {
+        class: 'workflow',
+        summary: `Reading experiment ${name} on Frank.`,
+        steps: [
+          {
+            target: 'frank',
+            command_type: 'read-experiment',
+            args: { name },
+            description: `Read experiment ${name} metadata + first response`,
+          },
+        ],
+      }
+    },
+  },
+  // W17.2 — "list frank experiments" / target-first ("frank: read franks workspace experiments")
+  {
+    pattern: /\b(?:frank|voldemort)\b.*\bexperiments?\b/i,
+    build: () => ({
+      class: 'workflow',
+      summary: 'Listing experiments in Frank\'s workspace.',
+      steps: [
+        {
+          target: 'frank',
+          command_type: 'list-experiments',
+          args: { limit: 20 },
+          description: 'List recent experiments in Frank\'s workspace',
+        },
+      ],
+    }),
+  },
+  // W17.2 — reverse word order: "experiments on frank" / "experiments in frank workspace"
+  {
+    pattern: /\bexperiments?\b.*\b(?:on|in|from)\s+(?:frank|voldemort)/i,
+    build: () => ({
+      class: 'workflow',
+      summary: 'Listing experiments in Frank\'s workspace.',
+      steps: [
+        {
+          target: 'frank',
+          command_type: 'list-experiments',
+          args: { limit: 20 },
+          description: 'List recent experiments in Frank\'s workspace',
+        },
+      ],
+    }),
+  },
 ]
 
 // ─── Status plan (fan-out helper builds the steps live) ─────────────────

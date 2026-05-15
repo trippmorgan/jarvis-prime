@@ -130,6 +130,37 @@ function composeFinalReply(plan: { summary: string }, events: ExecEvent[], klass
 function renderResult(ctx: Record<string, unknown>): string {
   // Tight summary — full result is in the result envelope. Telegram is
   // not the place to dump 4KB of stdout.
+
+  // W17.2 — list-experiments: multi-line summary so the Telegram reply
+  // actually shows the experiment names, not a bare "ok · count=20".
+  if (Array.isArray(ctx.experiments)) {
+    const exps = ctx.experiments as Record<string, unknown>[]
+    const total = typeof ctx.total === 'number' ? ctx.total : exps.length
+    if (exps.length === 0) return 'ok · no experiments found'
+    const top = exps.slice(0, 5).map((e) => {
+      const nm = String(e.name ?? '?')
+      const en = e.experiment_name ? ` — "${String(e.experiment_name).slice(0, 60)}"` : ''
+      const phi = typeof e.avg_phi_bilateral === 'number' ? ` Φ=${e.avg_phi_bilateral}` : ''
+      return `  • ${nm}${en}${phi}`
+    })
+    const hidden = total - top.length
+    const more = hidden > 0 ? `\n  … +${hidden} more not shown` : ''
+    return `${total} experiments\n${top.join('\n')}${more}`
+  }
+
+  // W17.2 — read-experiment: detail line with the headline fields.
+  if (ctx.experiment && typeof ctx.experiment === 'object') {
+    const e = ctx.experiment as Record<string, unknown>
+    const parts: string[] = []
+    if (e.experiment_name) parts.push(`"${String(e.experiment_name).slice(0, 80)}"`)
+    if (e.status) parts.push(`status=${e.status}`)
+    if (typeof e.avg_phi_bilateral === 'number') parts.push(`Φ_bi=${e.avg_phi_bilateral}`)
+    if (typeof e.duration_seconds === 'number') parts.push(`${Math.round(Number(e.duration_seconds))}s`)
+    if (typeof ctx.response_count === 'number') parts.push(`${ctx.response_count} responses`)
+    if (typeof e.minted_coins === 'number') parts.push(`${e.minted_coins} coins`)
+    return parts.length > 0 ? `ok · ${parts.join(' · ')}` : 'ok'
+  }
+
   const ok = ctx.ok === true ? 'ok' : 'fail'
   const bits: string[] = [ok]
   if (typeof ctx.uname === 'string') {

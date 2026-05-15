@@ -47,10 +47,15 @@ const baseSchema = z.object({
   TELEGRAM_BOT_USERNAME: z.string().default("trippassistant_bot"),
   CORPUS_CALLOSUM_ENABLED: boolFromEnv(true),
   OPENCLAW_CHAT_MODEL_RIGHT: z.string().default("gpt-5.4 codex"),
-  // Dual-brain orchestrations (Claude + GPT-Codex via corpus callosum) routinely
-  // run 5-15 minutes when /deep is on. 20 min gives genuine reasoning room
-  // before the kill switch trips; raise further if /deep work keeps timing out.
+  // W17.2 — DEPRECATED. Read for backwards compatibility but no longer
+  // wired into the dual-brain spawn. Telegram users won't wait 20 min for
+  // a reply; the new LEFT_HEMISPHERE_FAST_TIMEOUT_MS is the live knob.
   CORPUS_CALLOSUM_TIMEOUT_MS: z.coerce.number().default(1_200_000),
+  // W17.2 — hard cap on a single dual-brain Claude CLI spawn. Default 90s:
+  // a Telegram user has long since given up by then, and the W17 orchestrator
+  // is the path for genuinely structured/long work — dual-brain is the chat
+  // fallback. Raise this only if /deep chat is regularly hitting the cap.
+  LEFT_HEMISPHERE_FAST_TIMEOUT_MS: z.coerce.number().default(90_000),
   CORPUS_CLINICAL_OVERRIDE: boolFromEnv(false),
   JARVIS_EVOLVING_MESSAGE_ENABLED: boolFromEnv(true),
   RIGHT_BRAIN_AGENT_ENABLED: boolFromEnv(false),

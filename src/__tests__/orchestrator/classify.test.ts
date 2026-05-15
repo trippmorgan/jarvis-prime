@@ -36,4 +36,19 @@ describe('classifyIntent', () => {
     expect(classifyIntent('')).toBe('chat')
     expect(classifyIntent('   ')).toBe('chat')
   })
+
+  // W17.2 — Frank workspace / experiments. These were the regression cases
+  // behind the "Left hemisphere timed out after 600000ms" production bug:
+  // the orchestrator fell to `chat` and burned 10 minutes spawning Claude.
+  it('Frank experiment requests classify as workflow', () => {
+    expect(classifyIntent('show me frank experiments')).toBe('workflow')
+    expect(classifyIntent('list frank experiments')).toBe('workflow')
+    expect(classifyIntent('utilizing Frank: read franks workspace experiments')).toBe('workflow')
+    expect(classifyIntent('read frank experiment 2026-03-08-05-04-54')).toBe('workflow')
+  })
+
+  it('reverse word order ("experiments on frank") still classifies as workflow', () => {
+    expect(classifyIntent('experiments on frank')).toBe('workflow')
+    expect(classifyIntent('list experiments in voldemort workspace')).toBe('workflow')
+  })
 })

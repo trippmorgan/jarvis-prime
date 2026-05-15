@@ -56,4 +56,27 @@ describe('buildPlan', () => {
     expect(p.steps.length).toBe(0)
     expect(p.summary).toMatch(/don't have a concrete plan/i)
   })
+
+  // W17.2 — Frank workspace / experiments.
+
+  it('"list frank experiments" → list-experiments on frank', () => {
+    const p = buildPlan('list frank experiments', 'workflow')
+    expect(p.steps.length).toBe(1)
+    expect(p.steps[0].target).toBe('frank')
+    expect(p.steps[0].command_type).toBe('list-experiments')
+  })
+
+  it('"read frank experiment <name>" → read-experiment with name arg', () => {
+    const p = buildPlan('read frank experiment 2026-03-08-05-04-54', 'workflow')
+    expect(p.steps.length).toBe(1)
+    expect(p.steps[0].target).toBe('frank')
+    expect(p.steps[0].command_type).toBe('read-experiment')
+    expect(p.steps[0].args.name).toBe('2026-03-08-05-04-54')
+  })
+
+  it('target-first "Frank: read experiments" → list-experiments fallback', () => {
+    const p = buildPlan('utilizing Frank: read franks workspace experiments', 'workflow')
+    expect(p.steps.length).toBe(1)
+    expect(p.steps[0].command_type).toBe('list-experiments')
+  })
 })
