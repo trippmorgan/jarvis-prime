@@ -46,6 +46,9 @@ const RULES: ClassRule[] = [
   { pattern: /\b(experiments?|workspace|methodology)\b.*\b(on|in|from)\s+(frank|voldemort)\b/i, klass: 'workflow' },
   { pattern: /\b(rerun|re-run|re-?execute)\b.*\bexperiment/i, klass: 'workflow' },
 
+  // W19b — cross-lieutenant "morning check" / "morning briefing".
+  { pattern: /\b(morning\s+(?:check|briefing|brief)|daily\s+briefing|sit\s*rep)\b/i, klass: 'workflow' },
+
   // Simple plumbing checks
   { pattern: /\b(inspect|list)\s+(mcp|servers?|agents?)\b/i, klass: 'workflow' },
 ]

@@ -14,6 +14,75 @@ Jarvis Prime is the central brain for the Jarvis network. It bridges Telegram wi
 
 **Status (current, 2026-04-22):** 507/508 tests passing (1 live-only skipped by default), `tsc --noEmit` clean. Bridge live with `JARVIS_TIER0_ENABLED=true` and `LANGFUSE_ENABLED=true`. Tagged `v1.0.0` on `main` (2026-04-21 ship); waves 8.7 + 8.8 + 8.8.3 land on top of the tag.
 
+---
+
+## v2 — Prime as Orchestrator (W17 → W19, May 2026)
+
+Above the dual-brain runtime sits a thin orchestration layer that turns Tripp's Telegram into a command surface over the five-node mesh. Prime is now the *user* of jarvis-os; Tripp is the user of Prime.
+
+**The flow:**
+
+```
+Telegram message
+   │
+   ▼
+classifyIntent (regex, ~0ms)
+   │ ├─ chat → fall through to dual-brain (capped at 90s, W17.2)
+   │ └─ no match → classifyIntentWithLLM (gemma4:e2b on Frank, ~450ms, W18)
+   ▼
+buildPlan (hard-coded PatternToPlan templates)
+   │ └─ no template → buildPlanWithLLM (gemma4:e4b on Frank, ~1.3s, W19c)
+   ▼
+executePlan → emits W16 command envelope to lieutenant's room-listener
+   │
+   ▼
+results render into Telegram + GUI activity feed (per-step events)
+```
+
+**What landed:**
+
+| Wave | What | Visible effect |
+|---|---|---|
+| **W17** | Orchestrator scaffolding: 4-class intent (chat/query/workflow/status), Plan/PlanStep types, sequential executePlan over W16 envelope bus, Telegram hook, session-per-orchestration, PHI-safe timeline. | "all nodes status" returns a structured 5-row table instead of a 10-min hang. |
+| **W17.2** | Frank workspace commands (`list-experiments`, `read-experiment`) + dual-brain fast-cap (`LEFT_HEMISPHERE_FAST_TIMEOUT_MS=90_000`) + tree-kill on SIGKILL + GUI step_failed emission. | "show me frank experiments" returns 81 named entries with Φ scores in ~5s. |
+| **W17.3** | `rerun-experiment` re-dispatches a stored question through Frank's brain and saves a fresh `re-*` dir. Per-command poll overrides (240s for reruns). Claude Code hook self-registers `claude-code-cli` agent → visible in NodeTree. | "rerun frank experiment final-2026-03-14" produces a 3300-token bilateral answer + new experiment dir; Prime CLI shows in the shell's Critical tier. |
+| **W18** | LLM-fallback classifier. Closes the 6 W17.2 regex gaps in one shot. Hybrid: regex 0ms when matched, gemma4:e2b ~450ms otherwise. | "todays cases", "let us work on X", "reindex docs", "check the database" all classify correctly. |
+| **W19a** | Argus room-listener via user-mode systemd. | Status fan-out 5/5. |
+| **W19b** | "morning briefing" — first cross-lieutenant workflow plan. 4 steps spanning scalpel + dj-jarvis + frank + prime. | One Telegram message → one orchestration session → 10 GUI events across 4 nodes. |
+| **W19c** | Dynamic plan generation via gemma4:e4b. When the hard-coded planner has no template, the LLM picks one from the command catalog (strict validation). | Novel queries like "list models on frank ollama" get a real plan instead of "I don't have a concrete plan template for this yet." |
+
+**v2 source** lives entirely under `src/orchestrator/`:
+
+- `classify.ts` — regex-only IntentClass classifier (RULES table, first-match-wins, imperative verbs now precede status to fix "restart all nodes")
+- `classify-llm.ts` — gemma4:e2b fallback with LRU cache + onLLMCall telemetry
+- `plan.ts` — hard-coded PatternToPlan templates (restart, chrome-cdp, inspect-mcp, list/read/rerun-experiment, station-query family, morning-briefing fan-out)
+- `plan-llm.ts` — gemma4:e4b dynamic planner with command catalog + strict validation
+- `execute.ts` — async-iterable executor over the W16 envelope bus, per-command poll-timeout overrides, parallel fan-out for status class
+- `status.ts` — alive-lieutenant discovery + status-table renderer
+- `timeline.ts` — kernel /events emit per ExecEvent
+- `index.ts` — `orchestrate(message)` entrypoint composing all of the above
+- `telegram-hook.ts` — wraps `orchestrate()` for the Telegram poller; falls through to legacy dual-brain on class=chat
+
+**Vitest:** 101/101 passing across `__tests__/orchestrator/` (5 files).
+
+**Env knobs (defaults):**
+
+```
+JARVIS_LLM_CLASSIFIER_ENABLED=true
+JARVIS_LLM_CLASSIFIER_URL=http://192.168.0.108:11434/api/chat   # Frank Ollama
+JARVIS_LLM_CLASSIFIER_MODEL=gemma4:e2b
+JARVIS_LLM_CLASSIFIER_TIMEOUT_MS=10000
+
+JARVIS_LLM_PLANNER_ENABLED=true
+JARVIS_LLM_PLANNER_URL=http://192.168.0.108:11434/api/chat
+JARVIS_LLM_PLANNER_MODEL=gemma4:e4b
+JARVIS_LLM_PLANNER_TIMEOUT_MS=15000
+
+LEFT_HEMISPHERE_FAST_TIMEOUT_MS=90000   # dual-brain chat-fallback cap
+```
+
+Both LLM stages preheat on Prime boot (`warmupClassifierLLM` + `warmupPlannerLLM` in `src/index.ts`) so the first Telegram turn after a restart doesn't pay the gemma4 ~9s cold-load.
+
 ## How Tripp Uses Me
 
 Tripp talks to me on his phone. Primary interface: Telegram @trippassistant_bot. I stay out of his way until he asks for something, then I read the context, pick the right path, and come back with an answer rather than a question.

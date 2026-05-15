@@ -7,6 +7,7 @@ import { buildServer } from "./server.js";
 import { KernelRegister } from "./lieutenant/kernel-register.js";
 import { setAgentIdProvider } from "./lieutenant/kernel-events.js";
 import { warmupClassifierLLM } from "./orchestrator/classify-llm.js";
+import { warmupPlannerLLM } from "./orchestrator/plan-llm.js";
 
 const config = loadConfig();
 const { server, processor, poller, reporter } = await buildServer(config);
@@ -53,6 +54,14 @@ try {
     server.log.warn(
       { error: err instanceof Error ? err.message : String(err) },
       "W18 classifier warmup threw — first call will retry",
+    );
+  });
+
+  // W19c — preheat gemma4:e4b (the JSON planner). Same fail-safe pattern.
+  void warmupPlannerLLM().catch((err) => {
+    server.log.warn(
+      { error: err instanceof Error ? err.message : String(err) },
+      "W19c planner warmup threw — first call will retry",
     );
   });
 

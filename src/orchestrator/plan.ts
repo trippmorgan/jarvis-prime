@@ -129,6 +129,46 @@ const QUERY_PLANS: PatternToPlan[] = [
 // ─── Workflow plans ─────────────────────────────────────────────────────
 
 const WORKFLOW_PLANS: PatternToPlan[] = [
+  // W19b — "morning check" / "morning briefing" / "daily briefing".
+  // A single cross-lieutenant workflow that gathers the four
+  // most-asked-about signals in one round-trip: clinical schedule
+  // (Scalpel, redacted), radio station health (DJ-Jarvis), heavy-compute
+  // state (Frank), and Prime's own MCP/agent inventory. Demonstrates
+  // multi-target sequential dispatch over the W17 envelope bus.
+  {
+    pattern: /\b(morning\s+(?:check|briefing|brief)|daily\s+briefing|sit\s*rep)\b/i,
+    build: () => ({
+      class: 'workflow',
+      summary: 'Morning briefing — gathering signals across four lieutenants.',
+      steps: [
+        {
+          target: 'scalpel',
+          command_type: 'patient-schedule',
+          args: { date: 'today' },
+          description: 'Today\'s OR schedule (redacted counts + times)',
+        },
+        {
+          target: 'dj-jarvis',
+          command_type: 'station-query',
+          args: { query: 'station-check' },
+          description: 'WPFQ station health (API, AE Launcher, DPL coverage, disk, logger)',
+        },
+        {
+          target: 'frank',
+          command_type: 'health-check',
+          args: {},
+          description: 'Heavy-compute node liveness + load',
+        },
+        {
+          target: 'prime',
+          command_type: 'inspect-mcp',
+          args: {},
+          description: 'Prime\'s registered MCP servers inventory',
+        },
+      ],
+    }),
+  },
+
   // "frank restart ollama" or "restart ollama on frank"
   {
     pattern: /\brestart\s+(?<service>\w+(?:[-]\w+)*)\s+(?:on\s+)?(?<target>frank|scalpel|prime|argus|dj-jarvis)\b/i,

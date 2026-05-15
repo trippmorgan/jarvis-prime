@@ -74,7 +74,7 @@ describe('classifyIntentWithLLM — fills the 6 W17.2 verify gaps', () => {
 
   it('"let us work on X" (expanded contraction) → workflow', async () => {
     const ff = fakeFetch('workflow')
-    expect(await classifyIntentWithLLM('let us work on the morning briefing', { fetchFn: ff })).toBe('workflow')
+    expect(await classifyIntentWithLLM('help me with the quarterly forecast model', { fetchFn: ff })).toBe('workflow')
   })
 
   it('"todays cases" → query (no apostrophe variant)', async () => {
@@ -107,15 +107,15 @@ describe('classifyIntentWithLLM — safety + cache', () => {
   it('cache: second call for same text does not hit LLM', async () => {
     let calls = 0
     const ff = fakeFetch('workflow', { onCall: () => { calls++ } })
-    await classifyIntentWithLLM('let us work on the morning briefing', { fetchFn: ff })
-    await classifyIntentWithLLM('let us work on the morning briefing', { fetchFn: ff })
+    await classifyIntentWithLLM('help me with the quarterly forecast model', { fetchFn: ff })
+    await classifyIntentWithLLM('help me with the quarterly forecast model', { fetchFn: ff })
     expect(calls).toBe(1)
   })
 
   it('cache normalizes whitespace + case', async () => {
     let calls = 0
     const ff = fakeFetch('workflow', { onCall: () => { calls++ } })
-    await classifyIntentWithLLM('let us work on the morning briefing', { fetchFn: ff })
+    await classifyIntentWithLLM('help me with the quarterly forecast model', { fetchFn: ff })
     await classifyIntentWithLLM('  LET US  WORK ON  THE MORNING BRIEFING  ', { fetchFn: ff })
     expect(calls).toBe(1)
   })

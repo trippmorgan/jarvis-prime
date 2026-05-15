@@ -8,6 +8,7 @@
 import { classifyIntent } from './classify.js'
 import { classifyIntentWithLLM } from './classify-llm.js'
 import { buildPlan } from './plan.js'
+import { buildPlanWithLLM } from './plan-llm.js'
 import { executePlan } from './execute.js'
 import { statusFanOutSteps, renderStatusTable, parseStatusRow } from './status.js'
 import { emitTimelineFor } from './timeline.js'
@@ -64,13 +65,23 @@ export async function orchestrate(
     }
   }
 
-  const plan = buildPlan(message.text, klass)
+  let plan = buildPlan(message.text, klass)
 
   // For class='status' the plan's steps[] is empty by design — fill it
   // with one health-check per alive lieutenant via the fan-out helper.
   if (klass === 'status' && plan.steps.length === 0) {
     const steps = await statusFanOutSteps()
     plan.steps.push(...steps)
+  }
+
+  // W19c — when the hard-coded planner couldn't match a template
+  // (workflow/query class only), ask the LLM planner to pick one
+  // command from the catalog. Returns null if no clean mapping exists,
+  // in which case we keep the original empty plan and the orchestrator
+  // replies "no concrete plan yet".
+  if (plan.steps.length === 0 && (klass === 'workflow' || klass === 'query')) {
+    const llmPlan = await buildPlanWithLLM(message.text, klass)
+    if (llmPlan) plan = llmPlan
   }
 
   const events: ExecEvent[] = []
