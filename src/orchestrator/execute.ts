@@ -43,6 +43,7 @@ export const COMMAND_TIER: Record<string, number> = {
 const POLL_TIMEOUT_OVERRIDE_MS: Record<string, number> = {
   'rerun-experiment': 240_000,   // Frank brain ~30-180s per substantive Q
   'ollama-operation': 120_000,
+  'patient-schedule': 100_000,   // Athena CDP frameset scrape ~60-80s
 }
 
 export function pollTimeoutFor(command_type: string, fallback: number = DEFAULT_POLL_TIMEOUT_MS): number {

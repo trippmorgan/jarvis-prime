@@ -205,6 +205,29 @@ function renderResult(ctx: Record<string, unknown>): string {
     return lines.join('\n')
   }
 
+  // W20 — patient-schedule (Scalpel, PHI-redacted). The handler never
+  // emits identifiers; only counts/times/type-histogram + an honest
+  // status when the Athena CDP session is offline.
+  if (typeof ctx.patient_count === 'number' || ctx.status === 'athena-cdp-offline'
+      || ctx.status === 'extract-failed' || ctx.status === 'extractor-missing') {
+    if (ctx.status && ctx.status !== 'ok') {
+      const note = typeof ctx.note === 'string' ? ` — ${ctx.note}` : ''
+      return `schedule unavailable (${ctx.status})${note}`
+    }
+    const parts: string[] = [`${ctx.patient_count} cases`]
+    if (typeof ctx.providers_count === 'number') parts.push(`${ctx.providers_count} provider(s)`)
+    if (ctx.first_or_at) parts.push(`first ${ctx.first_or_at}`)
+    if (ctx.last_or_at) parts.push(`last ${ctx.last_or_at}`)
+    if (ctx.cases_by_type && typeof ctx.cases_by_type === 'object') {
+      const h = Object.entries(ctx.cases_by_type as Record<string, number>)
+        .map(([k, v]) => `${k}:${v}`)
+        .join(' ')
+      if (h) parts.push(`[${h}]`)
+    }
+    if (typeof ctx.archive_path === 'string') parts.push('(full in clinical-archive)')
+    return `ok · ${parts.join(' · ')}`
+  }
+
   // W17.2 — read-experiment: detail line with the headline fields.
   if (ctx.experiment && typeof ctx.experiment === 'object') {
     const e = ctx.experiment as Record<string, unknown>
