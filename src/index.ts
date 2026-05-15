@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { buildServer } from "./server.js";
 import { KernelRegister } from "./lieutenant/kernel-register.js";
 import { setAgentIdProvider } from "./lieutenant/kernel-events.js";
+import { warmupClassifierLLM } from "./orchestrator/classify-llm.js";
 
 const config = loadConfig();
 const { server, processor, poller, reporter } = await buildServer(config);
@@ -43,6 +44,15 @@ try {
     server.log.warn(
       { error: err instanceof Error ? err.message : String(err) },
       "tier0 prewarm threw — falling through to lazy init",
+    );
+  });
+
+  // W18 — preheat gemma4:e2b on Frank so first Telegram turn after a
+  // Prime restart doesn't pay the ~9s cold-load. Fire-and-forget.
+  void warmupClassifierLLM().catch((err) => {
+    server.log.warn(
+      { error: err instanceof Error ? err.message : String(err) },
+      "W18 classifier warmup threw — first call will retry",
     );
   });
 

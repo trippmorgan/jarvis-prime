@@ -21,6 +21,11 @@ const RULES: ClassRule[] = [
   { pattern: /\b(dpl\s+coverage|play\s*history|play\s*log|schedule\s+coverage)\b/i, klass: 'query' },
   { pattern: /\b(upcoming\s+(songs?|tracks?|music|schedule))\b/i, klass: 'query' },
 
+  // W18 — imperative verbs trump status patterns. "restart all nodes"
+  // is a workflow even though it contains "all nodes". Placed BEFORE the
+  // generic status rule so the verb wins the match race.
+  { pattern: /^\s*(restart|stop|start|kill|reload|deploy|rebuild)\s+/i, klass: 'workflow' },
+
   // Status / health (generic — station-specific queries already captured above)
   { pattern: /\b(all\s+nodes|health\s*check|what'?s\s+(running|alive)|status\s+(of|all)|nodes?\s+status)\b/i, klass: 'status' },
 
@@ -63,12 +68,6 @@ export function classifyIntent(text: string): IntentClass {
   return 'chat'
 }
 
-/**
- * Stub for the LLM fallback. Returns 'chat' until W18 wires the
- * Anthropic call. Kept here so the orchestrator can call it without
- * conditional logic; cost stays zero in v1.
- */
-export async function classifyIntentWithLLM(text: string): Promise<IntentClass> {
-  void text
-  return 'chat'
-}
+// W18: the LLM fallback now lives in classify-llm.ts and runs against
+// Frank's local OpenAI-compatible brain. The old stub is gone; the
+// orchestrator imports classifyIntentWithLLM directly from the new file.

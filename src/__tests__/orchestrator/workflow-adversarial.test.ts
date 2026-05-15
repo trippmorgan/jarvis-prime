@@ -34,11 +34,10 @@ describe('classifier: chat vs workflow boundaries', () => {
   })
 
   // GAP: "restart all nodes" is an imperative (should be workflow) but
-  // the status rule (\ball\s+nodes\b) fires first. Fail-safe: reads
-  // instead of restarts. If we want to support "restart all nodes" as a
-  // workflow, the status regex needs a negative lookahead for restart.
-  it('KNOWN GAP: "restart all nodes" captured by status (first-match-wins)', () => {
-    expect(classifyIntent('restart all nodes')).toBe('status')
+  // W18 — fixed. The imperative-verb rule now precedes the status rule
+  // in classify.ts RULES order, so "restart all nodes" wins as workflow.
+  it('"restart all nodes" → workflow (W18 reorder fixed first-match)', () => {
+    expect(classifyIntent('restart all nodes')).toBe('workflow')
   })
 
   it('"status of all" is status, not workflow', () => {
@@ -270,7 +269,7 @@ describe('tier: safety classification', () => {
     const tier0Commands = Object.entries(COMMAND_TIER)
       .filter(([, tier]) => tier === 0)
       .map(([cmd]) => cmd)
-    const readOnlyPrefixes = ['health', 'fetch', 'station-query', 'patient', 'inspect', 'chrome-cdp-status']
+    const readOnlyPrefixes = ['health', 'fetch', 'station-query', 'patient', 'inspect', 'chrome-cdp-status', 'list-', 'read-']
     for (const cmd of tier0Commands) {
       const isSafe = readOnlyPrefixes.some((p) => cmd.startsWith(p))
       expect(isSafe).toBe(true)

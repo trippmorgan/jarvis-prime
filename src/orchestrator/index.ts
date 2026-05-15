@@ -6,6 +6,7 @@
 // linkage live in T13 (timeline.ts).
 
 import { classifyIntent } from './classify.js'
+import { classifyIntentWithLLM } from './classify-llm.js'
 import { buildPlan } from './plan.js'
 import { executePlan } from './execute.js'
 import { statusFanOutSteps, renderStatusTable, parseStatusRow } from './status.js'
@@ -18,13 +19,40 @@ export interface OrchestrateOptions {
   onEvent?: (e: ExecEvent) => void | Promise<void>
   /** Session id from /sessions/start. Plumbed into command envelopes. */
   sessionId?: string
+  /** W18 — disable the LLM fallback (regex-only). Default: respect the
+   *  JARVIS_LLM_CLASSIFIER_ENABLED env. Set false in tests to skip the
+   *  network round-trip. */
+  llmClassifierEnabled?: boolean
 }
 
 export async function orchestrate(
   message: TelegramMessage,
   opts: OrchestrateOptions = {},
 ): Promise<OrchestrationResult> {
-  const klass = classifyIntent(message.text)
+  // W18 — two-stage classify: regex first (fast, free), Frank-brain
+  // LLM second only when regex returns 'chat'. Falls back to 'chat' if
+  // Frank is unreachable. See classify-llm.ts for the prompt + cache.
+  const klass = await classifyIntentWithLLM(message.text, {
+    enabled: opts.llmClassifierEnabled,
+    onLLMCall: (info) => {
+      // Best-effort telemetry. Fire-and-forget — never blocks orchestrate.
+      void emitTimelineFor(
+        {
+          kind: 'plan_formed',
+          step_number: 0,
+          total_steps: 0,
+          result: {
+            llm_classifier: true,
+            from_cache: info.fromCache,
+            duration_ms: info.durationMs,
+            ok: info.ok,
+            parsed: info.parsed,
+          },
+        } as ExecEvent,
+        opts.sessionId,
+      ).catch(() => undefined)
+    },
+  })
 
   if (klass === 'chat') {
     return {
