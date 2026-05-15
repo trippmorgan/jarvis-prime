@@ -50,6 +50,8 @@ results render into Telegram + GUI activity feed (per-step events)
 | **W19a** | Argus room-listener via user-mode systemd. | Status fan-out 5/5. |
 | **W19b** | "morning briefing" — first cross-lieutenant workflow plan. 4 steps spanning scalpel + dj-jarvis + frank + prime. | One Telegram message → one orchestration session → 10 GUI events across 4 nodes. |
 | **W19c** | Dynamic plan generation via gemma4:e4b. When the hard-coded planner has no template, the LLM picks one from the command catalog (strict validation). | Novel queries like "list models on frank ollama" get a real plan instead of "I don't have a concrete plan template for this yet." |
+| **W20a** | station-query rendered properly: station-check verdict (✅ on-air / ⚠️ STALE), play-history list, dpl-coverage. patient-schedule joins the poll-timeout override (100s) for the Athena CDP scrape. | Morning briefing dj-jarvis step returns a real station verdict; no more bare "fail". |
+| **W20b** | renderResult learns the patient-schedule shape — redacted aggregates (N cases · M providers · first/last · type-histogram · clinical-archive pointer) or an honest `athena-cdp-offline` line instead of "fail". | Morning briefing shows all 4 lieutenants meaningfully. **Production-validated: Prime delivers the redacted OR schedule to Telegram each morning** (PHI sealed in clinical-archive on Scalpel; only the summary leaves the box). |
 
 **v2 source** lives entirely under `src/orchestrator/`:
 
