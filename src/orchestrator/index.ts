@@ -231,10 +231,27 @@ function renderResult(ctx: Record<string, unknown>): string {
       }
       if (typeof ctx.player === 'string') lines.push(`   player: ${ctx.player}`)
     } else if (ctx.query === 'station-check') {
-      if (typeof ctx.summary === 'string') return ctx.summary
-      lines.push(typeof ctx.api_status === 'string' ? `API: ${ctx.api_status}` : 'station-check complete')
+      // W20 — fields produced by _q_station_check in commands.py.
+      if (typeof ctx.verdict === 'string') {
+        lines.push(ctx.alive === true ? `✅ ${ctx.verdict}` : `⚠️ ${ctx.verdict}`)
+      } else {
+        lines.push('station-check complete')
+      }
+      if (typeof ctx.last_track === 'string') lines.push(`   last: ${ctx.last_track}`)
+      if (typeof ctx.staleness_seconds === 'number') {
+        const m = Math.round(ctx.staleness_seconds / 60)
+        lines.push(`   last logged ${m}m ago`)
+      }
+      if (typeof ctx.tracks_logged_today === 'number') lines.push(`   ${ctx.tracks_logged_today} tracks logged today`)
+      // Legacy fields (kept for any older handler still in the field)
+      if (typeof ctx.api_status === 'string') lines.push(`API: ${ctx.api_status}`)
       if (typeof ctx.dpl_coverage === 'string') lines.push(`DPL: ${ctx.dpl_coverage}`)
-      if (typeof ctx.ae_launcher === 'string') lines.push(`AE Launcher: ${ctx.ae_launcher}`)
+    } else if (ctx.query === 'play-history' && Array.isArray(ctx.tracks)) {
+      const tr = ctx.tracks as Array<Record<string, unknown>>
+      lines.push(`${tr.length} recent tracks:`)
+      for (const t of tr.slice(-5)) lines.push(`   • ${t.title} — ${t.artist}`)
+    } else if (ctx.query === 'dpl-coverage' && typeof ctx.days_covered === 'number') {
+      lines.push(`DPL coverage: ${ctx.days_covered} day(s) of pre-built music`)
     } else if (typeof ctx.output === 'string') {
       return ctx.output.slice(0, 500)
     }
