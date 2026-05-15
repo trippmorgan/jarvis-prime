@@ -51,4 +51,19 @@ describe('classifyIntent', () => {
     expect(classifyIntent('experiments on frank')).toBe('workflow')
     expect(classifyIntent('list experiments in voldemort workspace')).toBe('workflow')
   })
+
+  it('station / radio queries classify as query', () => {
+    expect(classifyIntent("what's playing")).toBe('query')
+    expect(classifyIntent('now playing')).toBe('query')
+    expect(classifyIntent('current song')).toBe('query')
+    expect(classifyIntent('check the station')).toBe('query')
+    expect(classifyIntent('station check')).toBe('query')
+    expect(classifyIntent('station status')).toBe('query')
+    expect(classifyIntent('wpfq health check')).toBe('query') // note: wpfq+health matches station rule before generic health-check
+    expect(classifyIntent('dpl coverage')).toBe('query')
+    expect(classifyIntent('play history')).toBe('query')
+    expect(classifyIntent('upcoming songs')).toBe('query')
+    expect(classifyIntent('station logs')).toBe('query')
+    expect(classifyIntent('check what\'s playing on the radio')).toBe('query')
+  })
 })

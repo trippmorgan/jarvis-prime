@@ -148,6 +148,24 @@ function renderResult(ctx: Record<string, unknown>): string {
     return `${total} experiments\n${top.join('\n')}${more}`
   }
 
+  // W17.3 — rerun-experiment: multi-line with new dir + answer excerpt.
+  if (typeof ctx.new_experiment === 'string' && typeof ctx.rerun_of === 'string') {
+    const lines: string[] = []
+    lines.push(`rerun of ${ctx.rerun_of}`)
+    lines.push(`  → ${ctx.new_experiment}`)
+    if (typeof ctx.duration_seconds === 'number') lines.push(`  duration: ${ctx.duration_seconds}s`)
+    if (typeof ctx.routing === 'string' && ctx.routing) lines.push(`  routing: ${ctx.routing}${ctx.mode ? ' · mode=' + ctx.mode : ''}`)
+    if (typeof ctx.tokens === 'object' && ctx.tokens) {
+      const t = ctx.tokens as Record<string, unknown>
+      if (typeof t.completion_tokens === 'number') lines.push(`  tokens: in=${t.prompt_tokens ?? '?'} out=${t.completion_tokens}`)
+    }
+    if (typeof ctx.answer_excerpt === 'string' && ctx.answer_excerpt) {
+      const ex = String(ctx.answer_excerpt).slice(0, 200).replace(/\s+/g, ' ').trim()
+      lines.push(`  answer: "${ex}…"`)
+    }
+    return lines.join('\n')
+  }
+
   // W17.2 — read-experiment: detail line with the headline fields.
   if (ctx.experiment && typeof ctx.experiment === 'object') {
     const e = ctx.experiment as Record<string, unknown>
@@ -159,6 +177,30 @@ function renderResult(ctx: Record<string, unknown>): string {
     if (typeof ctx.response_count === 'number') parts.push(`${ctx.response_count} responses`)
     if (typeof e.minted_coins === 'number') parts.push(`${e.minted_coins} coins`)
     return parts.length > 0 ? `ok · ${parts.join(' · ')}` : 'ok'
+  }
+
+  // Station query results — surface the structured fields from dj-jarvis
+  if (typeof ctx.query === 'string') {
+    const lines: string[] = []
+    if (ctx.query === 'now-playing') {
+      if (typeof ctx.title === 'string') lines.push(`🎵 ${ctx.title}`)
+      if (typeof ctx.artist === 'string') lines.push(`   ${ctx.artist}`)
+      if (typeof ctx.elapsed === 'string' || typeof ctx.position === 'string') {
+        const pos = ctx.elapsed ?? ctx.position
+        const dur = ctx.duration ?? ctx.total
+        lines.push(`   ${pos}${dur ? ` / ${dur}` : ''}`)
+      }
+      if (typeof ctx.player === 'string') lines.push(`   player: ${ctx.player}`)
+    } else if (ctx.query === 'station-check') {
+      if (typeof ctx.summary === 'string') return ctx.summary
+      lines.push(typeof ctx.api_status === 'string' ? `API: ${ctx.api_status}` : 'station-check complete')
+      if (typeof ctx.dpl_coverage === 'string') lines.push(`DPL: ${ctx.dpl_coverage}`)
+      if (typeof ctx.ae_launcher === 'string') lines.push(`AE Launcher: ${ctx.ae_launcher}`)
+    } else if (typeof ctx.output === 'string') {
+      return ctx.output.slice(0, 500)
+    }
+    if (lines.length > 0) return lines.join('\n')
+    if (typeof ctx.result === 'string') return ctx.result.slice(0, 500)
   }
 
   const ok = ctx.ok === true ? 'ok' : 'fail'

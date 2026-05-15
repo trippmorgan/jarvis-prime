@@ -27,10 +27,26 @@ export const COMMAND_TIER: Record<string, number> = {
   'patient-schedule':  0,
   'inspect-mcp':       0,
   'chrome-cdp-status': 0,
+  'list-experiments':  0,
+  'read-experiment':   0,
+  'rerun-experiment':  1,
   'ollama-operation':  1,
   'run-diagnostic':    1,
   'restart-service':   2,
   'execute-script':    2,
+}
+
+// W17.3 — per-command poll timeout override. Commands that involve LLM
+// inference on Frank (dual-brain reasoning, multi-second-per-token) need
+// considerably more headroom than the 60s default. Anything not listed
+// falls back to DEFAULT_POLL_TIMEOUT_MS.
+const POLL_TIMEOUT_OVERRIDE_MS: Record<string, number> = {
+  'rerun-experiment': 240_000,   // Frank brain ~30-180s per substantive Q
+  'ollama-operation': 120_000,
+}
+
+export function pollTimeoutFor(command_type: string, fallback: number = DEFAULT_POLL_TIMEOUT_MS): number {
+  return POLL_TIMEOUT_OVERRIDE_MS[command_type] ?? fallback
 }
 
 export function tierFor(command_type: string): number {
@@ -191,7 +207,10 @@ export async function* executePlan(
 
     yield { kind: 'step_dispatched', step, step_number: stepNumber, total_steps: plan.steps.length, envelope_id: cmdId }
 
-    const polled = await pollForResult(cmdId, pollTimeoutMs)
+    // W17.3 — per-command-type poll override. LLM-inference commands
+    // (e.g. rerun-experiment) outlast the default 60s on substantive Qs.
+    const effectivePollMs = pollTimeoutFor(step.command_type, pollTimeoutMs)
+    const polled = await pollForResult(cmdId, effectivePollMs)
     if (polled.kind === 'result') {
       yield { kind: 'step_complete', step, step_number: stepNumber, total_steps: plan.steps.length, envelope_id: cmdId, result: polled.result }
     } else if (polled.kind === 'failed') {

@@ -79,4 +79,44 @@ describe('buildPlan', () => {
     expect(p.steps.length).toBe(1)
     expect(p.steps[0].command_type).toBe('list-experiments')
   })
+
+  // Station / radio queries → dj-jarvis
+  it('"what\'s playing" → station-query now-playing on dj-jarvis', () => {
+    const p = buildPlan("what's playing", 'query')
+    expect(p.steps.length).toBe(1)
+    expect(p.steps[0].target).toBe('dj-jarvis')
+    expect(p.steps[0].command_type).toBe('station-query')
+    expect(p.steps[0].args.query).toBe('now-playing')
+  })
+
+  it('"now playing" → same plan', () => {
+    const p = buildPlan('now playing', 'query')
+    expect(p.steps[0].target).toBe('dj-jarvis')
+    expect(p.steps[0].args.query).toBe('now-playing')
+  })
+
+  it('"station check" → station-query station-check', () => {
+    const p = buildPlan('station check', 'query')
+    expect(p.steps[0].target).toBe('dj-jarvis')
+    expect(p.steps[0].command_type).toBe('station-query')
+    expect(p.steps[0].args.query).toBe('station-check')
+  })
+
+  it('"dpl coverage" → station-query dpl-coverage', () => {
+    const p = buildPlan('dpl coverage', 'query')
+    expect(p.steps[0].target).toBe('dj-jarvis')
+    expect(p.steps[0].args.query).toBe('dpl-coverage')
+  })
+
+  it('"play history" → station-query play-history', () => {
+    const p = buildPlan('play history', 'query')
+    expect(p.steps[0].target).toBe('dj-jarvis')
+    expect(p.steps[0].args.query).toBe('play-history')
+  })
+
+  it('"upcoming songs" → station-query upcoming', () => {
+    const p = buildPlan('upcoming songs', 'query')
+    expect(p.steps[0].target).toBe('dj-jarvis')
+    expect(p.steps[0].args.query).toBe('upcoming')
+  })
 })
