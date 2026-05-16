@@ -67,6 +67,27 @@ export function classifyConfirmReply(
   return 'ambiguous'
 }
 
+// W21.15 — orchestrator failure must fall back to the conversational
+// brain (Tripp's principle: the orchestrator is an optimization, the
+// LLM is the floor — a failed/timed-out orchestrated answer must hand
+// the problem to Prime, never die into a dead "❌ Step x/y failed").
+// Kill-switch: JARVIS_ORCH_FALLBACK_ENABLED=0.
+const ORCH_FALLBACK_ENABLED = process.env.JARVIS_ORCH_FALLBACK_ENABLED !== '0'
+
+/** PHI-safe one-liner of what failed: command_type + status reason only
+ *  (reasons are statuses like extract-error / poll-timeout — never PHI). */
+export function summarizeOrchFailures(events: ExecEvent[]): string {
+  const failed = events.filter((e) => e.kind === 'step_failed')
+  return failed
+    .slice(0, 4)
+    .map((f) => {
+      const tgt = f.step?.target ? `${f.step.target} ` : ''
+      const cmd = f.step?.command_type ?? 'step'
+      return `${tgt}${cmd} → ${String(f.reason ?? 'unknown')}`
+    })
+    .join('; ')
+}
+
 async function kernelFetch(
   path: string,
   init?: RequestInit,
@@ -248,6 +269,43 @@ export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
     if (streamed.class === 'chat') {
       if (sessionId) await endSession(sessionId, { completed: true, class: 'chat', noop: true })
       return Promise.resolve(cfg.onChat(chatId, text, userId))
+    }
+
+    // ── 3.5. Orchestration FAILED → hand off to the conversational
+    // brain so Prime actually engages, instead of delivering a dead
+    // "❌ Step x/y failed" reply. A pending confirm gate is NOT a
+    // failure (it's handled in §4). Guardrails: onChat is conversational
+    // and structurally cannot fire a tier-3 envelope; the augmented
+    // context tells Prime to help/explain and never fabricate clinical/
+    // PHI data; the failure note carries only command_type + status.
+    const failedEvents = streamed.events.filter((e) => e.kind === 'step_failed')
+    const gateArmed =
+      pendingConfirms.has(chatId) ||
+      streamed.events.some((e) => e.kind === 'awaiting_confirm')
+    if (ORCH_FALLBACK_ENABLED && failedEvents.length > 0 && !gateArmed) {
+      const why = summarizeOrchFailures(streamed.events)
+      try {
+        await cfg.deliver(
+          chatId,
+          `⚠️ The automated path didn't get there (${why}). Let me take this directly…`,
+        )
+      } catch { /* swallow */ }
+      if (sessionId) {
+        await endSession(sessionId, {
+          completed: false,
+          class: streamed.class,
+          failed_count: failedEvents.length,
+          fellBackToChat: true,
+        })
+      }
+      const augmented =
+        `[Context for you, Prime — do NOT echo this bracket to the user. ` +
+        `An automated attempt to handle the message below failed: ${why}. ` +
+        `Engage and genuinely help: explain plainly what happened and do ` +
+        `what you can to solve it or give the real next step. Do NOT ` +
+        `fabricate clinical/patient data, and do NOT claim an external ` +
+        `action was performed.]\n\n${text}`
+      return Promise.resolve(cfg.onChat(chatId, augmented, userId))
     }
 
     // ── 4. Deliver the composed reply (gate prompt incl. phrase) ─────
