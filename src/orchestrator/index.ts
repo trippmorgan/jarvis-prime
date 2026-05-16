@@ -151,7 +151,7 @@ function composeFinalReply(plan: { summary: string }, events: ExecEvent[], klass
     }
     out.push(
       `⏸ Step ${awaiting.step_number}/${awaiting.total_steps} (${awaiting.step?.command_type}) is **awaiting confirmation** — review the above.`,
-      `Reply with: \`${awaiting.required_phrase ?? '(typed-phrase)'}\` to publish, or ignore to abort.`,
+      `Reply **publish** to post (or *cancel* to abort).`,
     )
     return out.join('\n')
   }

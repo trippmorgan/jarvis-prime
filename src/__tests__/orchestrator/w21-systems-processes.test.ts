@@ -8,6 +8,7 @@ import {
   renderResult,
   COMMAND_TIER,
 } from '../../orchestrator/index.js'
+import { classifyConfirmReply } from '../../orchestrator/telegram-hook.js'
 import type { ExecEvent } from '../../orchestrator/types.js'
 
 describe('W21 classify — Process A (X post)', () => {
@@ -100,14 +101,14 @@ describe('W21 confirm-gate UX — the draft/preview is shown at the T3 gate', ()
     },
   ]
 
-  it('renders the actual draft text before the confirm prompt (not a bare phrase ask)', () => {
+  it('renders the draft, then a natural confirm instruction (W21.2)', () => {
     const out = composeFinalReply({ summary: 'Drafting a WPFQ X post.' }, events, 'workflow')
     expect(out).toContain(draftText)
-    expect(out).toContain('CONFIRM POST')
     expect(out).toContain('awaiting confirmation')
-    // The old behavior was just "reply with phrase" with no artifact —
-    // assert the draft body is present, i.e. the gate is reviewable.
-    expect(out.indexOf(draftText)).toBeLessThan(out.indexOf('CONFIRM POST'))
+    // W21.2 — the gate no longer makes the human type a cryptic phrase;
+    // it says "Reply publish". The draft must precede that instruction.
+    expect(out.toLowerCase()).toContain('publish')
+    expect(out.indexOf(draftText)).toBeLessThan(out.toLowerCase().indexOf('reply'))
   })
 })
 
@@ -127,6 +128,28 @@ describe('W21.1 — failures are legible, never a bare "fail"', () => {
     })
     expect(r).toContain('Sea Of Sorrow')
     expect(r).not.toBe('fail')
+  })
+})
+
+describe('W21.2 — confirm gate accepts natural affirmatives', () => {
+  // The bug: Tripp typed "Publish" then "Confirm"; strict ===
+  // "CONFIRM SOCIAL-POST" rejected both and aborted the gate.
+  const PHRASE = 'CONFIRM SOCIAL-POST'
+  it('accepts the canonical phrase (any case, trailing punctuation)', () => {
+    expect(classifyConfirmReply('CONFIRM SOCIAL-POST', PHRASE)).toBe('confirm')
+    expect(classifyConfirmReply('confirm social-post.', PHRASE)).toBe('confirm')
+  })
+  it('accepts natural affirmatives', () => {
+    for (const a of ['publish', 'Publish', 'confirm', 'post it', 'send it', 'yes', 'go ahead', 'do it', 'ok'])
+      expect(classifyConfirmReply(a, PHRASE)).toBe('confirm')
+  })
+  it('treats explicit negatives as cancel', () => {
+    for (const n of ['cancel', 'no', 'abort', 'stop', 'nevermind'])
+      expect(classifyConfirmReply(n, PHRASE)).toBe('cancel')
+  })
+  it('anything else is ambiguous (gate held, not silently lost)', () => {
+    expect(classifyConfirmReply('what time is the show', PHRASE)).toBe('ambiguous')
+    expect(classifyConfirmReply('actually make it about grunge night', PHRASE)).toBe('ambiguous')
   })
 })
 

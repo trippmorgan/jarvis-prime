@@ -40,6 +40,32 @@ interface PendingConfirm {
 // chatId → pending T3 confirmation. Module-scoped: one poller process.
 const pendingConfirms = new Map<string, PendingConfirm>()
 
+// W21.2 — humans do not type "CONFIRM SOCIAL-POST" verbatim. Accept the
+// canonical minted phrase OR a natural affirmative; treat explicit
+// negatives as abort; treat anything else as AMBIGUOUS (re-prompt, keep
+// the gate) so an unrelated message never silently publishes, cancels,
+// or falls through to chat losing the gate.
+const AFFIRM = new Set([
+  'confirm', 'confirmed', 'publish', 'publish it', 'post', 'post it',
+  'send', 'send it', 'ship', 'ship it', 'yes', 'yep', 'yeah', 'y',
+  'go', 'go ahead', 'do it', 'approved', 'approve', 'ok', 'okay', 'k',
+])
+const NEGATE = new Set([
+  'no', 'nope', 'cancel', 'abort', 'stop', 'nevermind', 'never mind',
+  "don't", 'do not', 'dont', 'reject', 'discard', 'kill it',
+])
+
+export function classifyConfirmReply(
+  reply: string,
+  phrase: string,
+): 'confirm' | 'cancel' | 'ambiguous' {
+  const norm = reply.trim().toLowerCase().replace(/[.!?,]+$/g, '').trim()
+  if (norm === phrase.trim().toLowerCase()) return 'confirm'
+  if (AFFIRM.has(norm)) return 'confirm'
+  if (NEGATE.has(norm)) return 'cancel'
+  return 'ambiguous'
+}
+
 async function kernelFetch(
   path: string,
   init?: RequestInit,
@@ -113,18 +139,20 @@ export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
         pendingConfirms.delete(chatId)
         // fall through — stale gate, treat the message normally
       } else {
-        const reply = text.trim()
-        const matches = reply.toUpperCase() === pend.phrase.toUpperCase()
-        if (matches) {
+        const decision = classifyConfirmReply(text, pend.phrase)
+        if (decision === 'confirm') {
           pendingConfirms.delete(chatId)
+          // The kernel matches required_phrase EXACTLY (SQL =), so always
+          // send the canonical minted phrase regardless of what natural
+          // affirmative the user actually typed.
           const res = await kernelFetch(`/envelopes/${pend.envelopeId}/confirm`, {
             method: 'POST',
             body: JSON.stringify({ phrase: pend.phrase }),
           })
-          if (!res || res.__error) {
+          if (!res || (res as { __error?: boolean }).__error) {
             await cfg.deliver(
               chatId,
-              `⚠️ Confirm failed (${res?.status ?? 'kernel unreachable'}). Nothing was published. Try the request again.`,
+              `⚠️ Confirm failed (${(res as { status?: number })?.status ?? 'kernel unreachable'}). Nothing was published. Try the request again.`,
             )
             return
           }
@@ -133,14 +161,23 @@ export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
           await cfg.deliver(chatId, out)
           return
         }
-        // Any non-matching message aborts the gate, then is handled normally.
-        pendingConfirms.delete(chatId)
-        await kernelFetch(`/envelopes/${pend.envelopeId}/cancel`, {
-          method: 'POST',
-          body: JSON.stringify({ reason: 'user did not confirm' }),
-        })
-        await cfg.deliver(chatId, `✋ Aborted — \`${pend.commandType}\` not published.`)
-        // continue ↓ — process this new message
+        if (decision === 'cancel') {
+          pendingConfirms.delete(chatId)
+          await kernelFetch(`/envelopes/${pend.envelopeId}/cancel`, {
+            method: 'POST',
+            body: JSON.stringify({ reason: 'user declined' }),
+          })
+          await cfg.deliver(chatId, `✋ Aborted — \`${pend.commandType}\` not published.`)
+          return
+        }
+        // AMBIGUOUS: keep the gate armed, re-prompt. Never silently
+        // publish, cancel, or drop into chat — that loses the gate and
+        // confused Tripp ("Publish"/"Confirm" → conversational answer).
+        await cfg.deliver(
+          chatId,
+          `⏸ Still holding \`${pend.commandType}\`. Reply *publish* to post, or *cancel* to abort. (Auto-expires in a few minutes.)`,
+        )
+        return
       }
     }
 
