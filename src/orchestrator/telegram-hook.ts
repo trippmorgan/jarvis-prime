@@ -117,11 +117,20 @@ async function pollConfirmResult(envelopeId: string): Promise<string> {
     const envelopes = (list?.envelopes as Array<{ context?: Record<string, unknown> }>) ?? []
     if (envelopes.length > 0) {
       const ctx = envelopes[0].context ?? {}
-      return `✅ Confirmed.\n${renderResult(ctx)}`
+      // W21.8 — REPORT OUTCOMES FAITHFULLY. The old code prefixed every
+      // result with "✅ Confirmed." even when the action FAILED, so a
+      // post that died on missing X credentials read as a success. The
+      // header must reflect what actually happened, not just that the
+      // gate was confirmed.
+      const ok = ctx.ok !== false && !ctx.error
+      const head = ok
+        ? '✅ Done — confirmed and executed.'
+        : '❌ Confirmed, but it did NOT complete:'
+      return `${head}\n${renderResult(ctx)}`
     }
     await new Promise((r) => setTimeout(r, CONFIRM_POLL_MS))
   }
-  return '✅ Confirmed — sent for execution, but no result came back in time. Check the session timeline.'
+  return '⏳ Confirmed and dispatched, but no result came back in time — it may not have completed. Check the session timeline before assuming it did.'
 }
 
 export interface TelegramHookConfig {
