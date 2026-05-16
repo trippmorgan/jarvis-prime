@@ -198,6 +198,35 @@ describe('W21.5 — "what did we do today" is a factual recap, not radio', () =>
   })
 })
 
+describe('W21.10 — Athena/clinical routing (PHI-safe handler)', () => {
+  it('Athena / my-schedule / schedule-for-<day> phrasings route to scalpel patient-schedule', () => {
+    for (const t of [
+      'use the athena skill',
+      'athena schedule',
+      'check my schedule for Monday',
+      'whats on my OR schedule tomorrow',
+      'pull the patient schedule',
+      'todays cases',
+    ]) {
+      expect(classifyIntent(t)).toBe('query')
+      const p = buildPlan(t, 'query')
+      expect(p.steps[0]?.target).toBe('scalpel')
+      expect(p.steps[0]?.command_type).toBe('patient-schedule')
+    }
+  })
+  it('preserves the adversarial guards — non-clinical "schedule" stays chat', () => {
+    expect(classifyIntent('schedule a meeting')).toBe('chat')
+    expect(classifyIntent('what is on the schedule')).toBe('chat')
+  })
+  it('extracts the requested date (Monday → an ISO date or today)', () => {
+    const p = buildPlan('check my schedule for Monday', 'query')
+    const d = String(p.steps[0]?.args.date)
+    expect(d === 'today' || /^\d{4}-\d{2}-\d{2}$/.test(d)).toBe(true)
+    expect(buildPlan('use the athena skill', 'query').steps[0]?.args.date).toBe('today')
+    expect(String(buildPlan('schedule for 2026-05-18', 'query').steps[0]?.args.date)).toBe('2026-05-18')
+  })
+})
+
 describe('W21 renderResult — morning-show snapshot', () => {
   it('renders stage table + previews + deploy summary', () => {
     const buildCtx = {

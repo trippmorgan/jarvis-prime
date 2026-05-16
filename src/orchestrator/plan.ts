@@ -16,21 +16,48 @@ interface PatternToPlan {
 
 // ─── Query plans (PHI-aware) ────────────────────────────────────────────
 
+// W21.10 — resolve a date token from the message to today | tomorrow |
+// YYYY-MM-DD so "schedule for Monday" pulls Monday, not today. Pure
+// date math (no PHI). Weekday → next occurrence on/after today, ET.
+function resolveScheduleDate(text: string): string {
+  const t = text.toLowerCase()
+  const iso = t.match(/\b(\d{4}-\d{2}-\d{2})\b/)
+  if (iso) return iso[1]
+  if (/\btomorrow\b/.test(t)) return 'tomorrow'
+  if (/\btoday\b/.test(t)) return 'today'
+  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+  const m = t.match(/\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/)
+  if (m) {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    const target = days.indexOf(m[1])
+    let d = now.getDay()
+    let add = (target - d + 7) % 7
+    if (add === 0) add = 0 // same weekday → today's clinic
+    const dt = new Date(now)
+    dt.setDate(now.getDate() + add)
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+  }
+  return 'today'
+}
+
 const QUERY_PLANS: PatternToPlan[] = [
   {
-    pattern: /\b(patient\s+schedule|morning\s+report|surgery\s+list|or\s+schedule)\b/i,
-    build: () => ({
-      class: 'query',
-      summary: 'Pulling the redacted patient schedule from Scalpel.',
-      steps: [
-        {
-          target: 'scalpel',
-          command_type: 'patient-schedule',
-          args: { date: 'today' },
-          description: 'Fetch today\'s OR schedule (redacted summary; full version stays in clinical-archive)',
-        },
-      ],
-    }),
+    pattern: /\bmy\s+(?:or\s+|surgery\s+|clinic\s+|case\s+)?schedule\b|\bschedule\s+(?:for\s+)?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})\b|\bathena\b[^.\n]{0,24}\b(?:schedul\w*|patient|cases?|emr|clinic|appointment|skill|request|pull)\b|\b(?:schedul\w*|patient|cases?|emr|clinic|appointment)\b[^.\n]{0,24}\bathena\b|\b(?:patient\s+schedule|morning\s+report|surgery\s+list|or\s+schedule|today'?s\s+cases|tomorrow'?s\s+cases)\b/i,
+    build: (m) => {
+      const date = resolveScheduleDate(m.input ?? '')
+      return {
+        class: 'query',
+        summary: `Pulling the redacted ${date === 'today' ? 'OR' : date} schedule from Scalpel (Athena).`,
+        steps: [
+          {
+            target: 'scalpel',
+            command_type: 'patient-schedule',
+            args: { date },
+            description: `Fetch the ${date} OR schedule (redacted summary; full PHI stays in clinical-archive)`,
+          },
+        ],
+      }
+    },
   },
 
   // Station / radio queries → dj-jarvis via jarvis-os envelope bus

@@ -38,7 +38,14 @@ const RULES: ClassRule[] = [
   { pattern: /\b(all\s+nodes|health\s*check|what'?s\s+(running|alive)|status\s+(of|all)|nodes?\s+status)\b/i, klass: 'status' },
 
   // Clinical query (PHI path; PHI redactor must fire)
-  { pattern: /\b(patient\s+schedule|morning\s+report|surgery\s+list|or\s+schedule|today'?s\s+cases|tomorrow'?s\s+cases)\b/i, klass: 'query' },
+  // W21.10 — clinical / Athena. "use the athena skill" and "check my
+  // schedule for Monday" were falling to chat (no live Athena there) →
+  // "Athena request failed?". Broadened on CLINICAL signals only —
+  // `athena`, possessive "my … schedule", "schedule for <day>" — so
+  // the adversarial guards ("schedule a meeting", bare "what is on the
+  // schedule") still stay chat. All of this routes to the PHI-SAFE
+  // scalpel patient-schedule handler (redacted aggregates only).
+  { pattern: /\bmy\s+(?:or\s+|surgery\s+|clinic\s+|case\s+)?schedule\b|\bschedule\s+(?:for\s+)?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next\s+week|this\s+week|\d{4}-\d{2}-\d{2})\b|\bathena\b[^.\n]{0,24}\b(?:schedul\w*|patient|cases?|emr|clinic|appointment|skill|request|pull)\b|\b(?:schedul\w*|patient|cases?|emr|clinic|appointment)\b[^.\n]{0,24}\bathena\b|\b(?:patient\s+schedule|morning\s+report|surgery\s+list|or\s+schedule|today'?s\s+cases|tomorrow'?s\s+cases)\b/i, klass: 'query' },
 
   // W21 — Process A (X post), general phrasings. A plain "draft a tweet
   // about the new morning show" still orchestrates instead of falling
