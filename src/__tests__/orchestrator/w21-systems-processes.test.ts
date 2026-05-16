@@ -111,6 +111,25 @@ describe('W21 confirm-gate UX — the draft/preview is shown at the T3 gate', ()
   })
 })
 
+describe('W21.1 — failures are legible, never a bare "fail"', () => {
+  it('renderResult surfaces the reason on ok:false (not mute "fail")', () => {
+    expect(renderResult({ ok: false, error: 'station source unavailable: ssh timeout' }))
+      .toBe('fail: station source unavailable: ssh timeout')
+    expect(renderResult({ ok: false, status: 'athena-cdp-offline' }))
+      .toContain('athena-cdp-offline')
+    // No detail at all still beats a silent "fail"
+    expect(renderResult({ ok: false })).toBe('fail: no detail returned')
+  })
+  it('a successful social-draft still renders the draft (regression)', () => {
+    const r = renderResult({
+      command_type: 'social-draft', platform: 'x', dry_run: true,
+      post_text: '🎵 Now spinning: Sea Of Sorrow — Alice In Chains. #WPFQ', char_count: 56,
+    })
+    expect(r).toContain('Sea Of Sorrow')
+    expect(r).not.toBe('fail')
+  })
+})
+
 describe('W21 renderResult — morning-show snapshot', () => {
   it('renders stage table + previews + deploy summary', () => {
     const buildCtx = {

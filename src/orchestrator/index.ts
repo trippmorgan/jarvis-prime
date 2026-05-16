@@ -365,6 +365,17 @@ function renderResult(ctx: Record<string, unknown>): string {
     if (typeof ctx.result === 'string') return ctx.result.slice(0, 500)
   }
 
+  // W21.1 — never emit a bare "fail" with no reason. If the handler
+  // failed, surface why (error / non-ok status) so the user sees
+  // "fail: station source unavailable" not a mute "fail".
+  if (ctx.ok === false) {
+    const why =
+      (typeof ctx.error === 'string' && ctx.error) ||
+      (typeof ctx.status === 'string' && ctx.status !== 'ok' && ctx.status) ||
+      'no detail returned'
+    return `fail: ${String(why).slice(0, 300)}`
+  }
+
   const ok = ctx.ok === true ? 'ok' : 'fail'
   const bits: string[] = [ok]
   if (typeof ctx.uname === 'string') {

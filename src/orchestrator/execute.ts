@@ -108,6 +108,14 @@ async function emitCommand(
   deadlineSec: number,
 ): Promise<EmitResponse | null> {
   const deadline = new Date(Date.now() + deadlineSec * 1000).toISOString()
+  const tier = tierFor(step.command_type)
+  // W21.1 — the kernel stores `input.required_phrase ?? null` and never
+  // mints one itself, so a T3 step with no phrase lands awaiting_input
+  // with required_phrase=null → Telegram shows "(typed-phrase)" and the
+  // confirm route (… AND required_phrase = $2) can never match. The
+  // orchestrator must supply the phrase for tier≥3 steps.
+  const requiredPhrase =
+    tier >= 3 ? `CONFIRM ${step.command_type.toUpperCase()}` : undefined
   return kernelFetch<EmitResponse>('/envelopes/emit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -121,7 +129,8 @@ async function emitCommand(
         session_id: sessionId,
         ...step.args,
       },
-      tier_action: tierFor(step.command_type),
+      tier_action: tier,
+      ...(requiredPhrase ? { required_phrase: requiredPhrase } : {}),
       deadline,
     }),
   })
@@ -218,6 +227,21 @@ export async function* executePlan(
     const effectivePollMs = pollTimeoutFor(step.command_type, pollTimeoutMs)
     const polled = await pollForResult(cmdId, effectivePollMs)
     if (polled.kind === 'result') {
+      // W21.1 — a result envelope can carry a SOFT failure: the handler
+      // ran but returned {ok:false,...}. That is NOT a completed step.
+      // Treating it as success let a failed social-draft proceed to the
+      // T3 publish gate ("✅ social-draft: fail ⏸ awaiting confirm").
+      // A soft-failed step aborts the workflow exactly like a hard fail.
+      const rc = (polled.result ?? {}) as Record<string, unknown>
+      if (rc.ok === false) {
+        const reason =
+          (typeof rc.error === 'string' && rc.error) ||
+          (typeof rc.status === 'string' && rc.status !== 'ok' && rc.status) ||
+          'handler returned ok:false'
+        yield { kind: 'step_failed', step, step_number: stepNumber, total_steps: plan.steps.length, envelope_id: cmdId, reason, result: polled.result }
+        yield { kind: 'orchestration_done', result: { completed: false } }
+        return
+      }
       yield { kind: 'step_complete', step, step_number: stepNumber, total_steps: plan.steps.length, envelope_id: cmdId, result: polled.result }
     } else if (polled.kind === 'failed') {
       yield { kind: 'step_failed', step, step_number: stepNumber, total_steps: plan.steps.length, envelope_id: cmdId, reason: polled.reason }
