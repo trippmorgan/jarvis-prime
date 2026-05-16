@@ -37,6 +37,17 @@ const RULES: ClassRule[] = [
   // Status / health (generic — station-specific queries already captured above)
   { pattern: /\b(all\s+nodes|health\s*check|what'?s\s+(running|alive)|status\s+(of|all)|nodes?\s+status)\b/i, klass: 'status' },
 
+  // AVSO v1 — Athena NAVIGATION (read-only, no PHI). A leading nav verb
+  // + an Athena nav target. Placed BEFORE the W21.10 clinical/export
+  // rule so "open the calendar" / "go to the schedule" route to the
+  // nav plan, while data-retrieval phrasings ("show me my schedule",
+  // "today's cases", anything with "my … schedule") fall through to the
+  // export rule below. "my" is intentionally NOT an allowed determiner
+  // (that signals export). Decoys ("schedule a meeting", "open the
+  // door") lack a nav target → stay chat. klass=query so plan.ts picks
+  // the athena-nav plan from QUERY_PLANS.
+  { pattern: /\b(?:open|go\s+to|navigate\s+to|take\s+me\s+to|pull\s+up|bring\s+up|switch\s+to|jump\s+to)\s+(?:the\s+)?(?:athena\s+)?(?:calendar|appointment\s+book|today'?s\s+(?:appointments|schedule)|schedule(?:\s+screen)?|dashboard|athena\s+home|home\s+page)\b/i, klass: 'query' },
+
   // Clinical query (PHI path; PHI redactor must fire)
   // W21.10 — clinical / Athena. "use the athena skill" and "check my
   // schedule for Monday" were falling to chat (no live Athena there) →

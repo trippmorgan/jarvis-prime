@@ -24,6 +24,23 @@ describe('classifyIntent', () => {
     expect(classifyIntent('OR schedule')).toBe('query')
   })
 
+  it('AVSO v1 — detects Athena navigation verbs as query (not chat)', () => {
+    expect(classifyIntent('open the calendar')).toBe('query')
+    expect(classifyIntent('go to the schedule')).toBe('query')
+    expect(classifyIntent("navigate to today's appointments")).toBe('query')
+    expect(classifyIntent('pull up the appointment book')).toBe('query')
+    expect(classifyIntent('open athena dashboard')).toBe('query')
+    expect(classifyIntent("take me to today's schedule")).toBe('query')
+  })
+
+  it('AVSO v1 — does NOT capture nav decoys (stay chat) or break export', () => {
+    expect(classifyIntent('schedule a meeting for me')).toBe('chat')
+    expect(classifyIntent('open the door')).toBe('chat')
+    expect(classifyIntent('go to bed')).toBe('chat')
+    expect(classifyIntent('show me my OR schedule')).toBe('query')
+    expect(classifyIntent("today's cases")).toBe('query')
+  })
+
   it('detects workflow / imperative orders', () => {
     expect(classifyIntent('frank restart ollama')).toBe('workflow')
     expect(classifyIntent('restart playoutone on dj-jarvis')).toBe('workflow')

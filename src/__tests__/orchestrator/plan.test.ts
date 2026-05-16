@@ -23,6 +23,32 @@ describe('buildPlan', () => {
     expect(p.steps[0].command_type).toBe('patient-schedule')
   })
 
+  it('AVSO v1 — "open the calendar" → scalpel athena-nav calendar_menu, tier-0 (no confirm)', () => {
+    const p = buildPlan('open the calendar', 'query')
+    expect(p.class).toBe('query')
+    expect(p.steps.length).toBe(1)
+    expect(p.steps[0].target).toBe('scalpel')
+    expect(p.steps[0].command_type).toBe('athena-nav')
+    expect(p.steps[0].args.intent).toBe('calendar_menu')
+  })
+
+  it('AVSO v1 — "go to today\'s schedule" → athena-nav todays_schedule', () => {
+    const p = buildPlan("go to today's schedule", 'query')
+    expect(p.steps[0].command_type).toBe('athena-nav')
+    expect(p.steps[0].args.intent).toBe('todays_schedule')
+  })
+
+  it('AVSO v1 — nav plan precedes clinical/export plan (no PHI pull for nav verbs)', () => {
+    const p = buildPlan('open athena dashboard', 'query')
+    expect(p.steps[0].command_type).toBe('athena-nav')
+    expect(p.steps[0].command_type).not.toBe('patient-schedule')
+  })
+
+  it('AVSO v1 — export phrasing still routes to patient-schedule (not nav)', () => {
+    const p = buildPlan('show me my OR schedule', 'query')
+    expect(p.steps[0].command_type).toBe('patient-schedule')
+  })
+
   it('"frank restart ollama" → restart-service step on frank', () => {
     const p = buildPlan('frank restart ollama', 'workflow')
     expect(p.steps.length).toBe(1)

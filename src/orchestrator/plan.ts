@@ -40,7 +40,40 @@ function resolveScheduleDate(text: string): string {
   return 'today'
 }
 
+// AVSO v1 — resolve a nav verb phrase to a W22 nav-map intent name.
+// nav-map currently exposes calendar_menu + todays_schedule; "appointment
+// book" maps to calendar_menu (the Calendar menu is its entry primitive)
+// until an appointment_book intent is captured (SPEC v2, post Appointment
+// Schedule migration — ATHENA-NAV-RESEARCH.md §3).
+function resolveNavIntent(text: string): string {
+  const t = text.toLowerCase()
+  if (/\bcalendar\b|\bappointment\s+book\b/.test(t)) return 'calendar_menu'
+  return 'todays_schedule' // today's schedule|appointments, schedule, dashboard, home
+}
+
 const QUERY_PLANS: PatternToPlan[] = [
+  // AVSO v1 — Athena NAVIGATION (read-only, tier-0, NO confirm gate).
+  // MUST precede the clinical/export plan so nav verbs navigate instead
+  // of pulling a redacted schedule. Mirrors the classify.ts nav rule.
+  {
+    pattern: /\b(?:open|go\s+to|navigate\s+to|take\s+me\s+to|pull\s+up|bring\s+up|switch\s+to|jump\s+to)\s+(?:the\s+)?(?:athena\s+)?(?:calendar|appointment\s+book|today'?s\s+(?:appointments|schedule)|schedule(?:\s+screen)?|dashboard|athena\s+home|home\s+page)\b/i,
+    build: (m) => {
+      const intent = resolveNavIntent(m.input ?? '')
+      return {
+        class: 'query',
+        summary: `Navigating Athena on Scalpel (${intent}). Read-only — no patient data leaves the box.`,
+        steps: [
+          {
+            target: 'scalpel',
+            command_type: 'athena-nav',
+            args: { intent },
+            description: `Execute the '${intent}' nav-map intent in Athena (W22). Returns a non-PHI status only.`,
+          },
+        ],
+      }
+    },
+  },
+
   {
     pattern: /\bmy\s+(?:or\s+|surgery\s+|clinic\s+|case\s+)?schedule\b|\bschedule\s+(?:for\s+)?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})\b|\bathena\b[^.\n]{0,24}\b(?:schedul\w*|patient|cases?|emr|clinic|appointment|skill|request|pull)\b|\b(?:schedul\w*|patient|cases?|emr|clinic|appointment)\b[^.\n]{0,24}\bathena\b|\b(?:patient\s+schedule|morning\s+report|surgery\s+list|or\s+schedule|today'?s\s+cases|tomorrow'?s\s+cases)\b/i,
     build: (m) => {

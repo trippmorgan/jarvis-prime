@@ -25,6 +25,7 @@ export const COMMAND_TIER: Record<string, number> = {
   'fetch-logs':        0,
   'station-query':     0,
   'patient-schedule':  0,
+  'athena-nav':        0,   // AVSO v1 — read-only nav, NO confirm gate (AC6)
   'inspect-mcp':       0,
   'chrome-cdp-status': 0,
   'list-experiments':  0,
@@ -48,6 +49,7 @@ const POLL_TIMEOUT_OVERRIDE_MS: Record<string, number> = {
   'rerun-experiment': 240_000,   // Frank brain ~30-180s per substantive Q
   'ollama-operation': 120_000,
   'patient-schedule': 100_000,   // Athena CDP frameset scrape ~60-80s
+  'athena-nav':        60_000,   // AVSO v1 — click-only nav (Pendo + steps), ~10-30s
   'morning-show-build':  120_000, // plan/status mode is fast; headroom if execute=true kicks the pipeline
 }
 

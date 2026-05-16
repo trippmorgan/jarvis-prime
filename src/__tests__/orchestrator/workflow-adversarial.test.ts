@@ -269,7 +269,11 @@ describe('tier: safety classification', () => {
     const tier0Commands = Object.entries(COMMAND_TIER)
       .filter(([, tier]) => tier === 0)
       .map(([cmd]) => cmd)
-    const readOnlyPrefixes = ['health', 'fetch', 'station-query', 'patient', 'inspect', 'chrome-cdp-status', 'list-', 'read-']
+    // 'athena-nav' (AVSO v1) is tier-0 and read-only by construction:
+    // click-only navigation with NO field-write capability — proven by
+    // athena-nav-selftest.js (static + about:blank integration) and the
+    // cmd_athena_nav whitelist. It cannot mutate EMR state.
+    const readOnlyPrefixes = ['health', 'fetch', 'station-query', 'patient', 'athena-nav', 'inspect', 'chrome-cdp-status', 'list-', 'read-']
     for (const cmd of tier0Commands) {
       const isSafe = readOnlyPrefixes.some((p) => cmd.startsWith(p))
       expect(isSafe).toBe(true)
