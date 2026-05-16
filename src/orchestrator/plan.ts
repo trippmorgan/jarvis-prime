@@ -126,9 +126,164 @@ const QUERY_PLANS: PatternToPlan[] = [
   },
 ]
 
+// W21 — shared builder for the general X-post templates. social-draft
+// (T1, auto) → social-post (T3, typed-confirm). "Confirm at publish
+// only" — the draft is rendered at the gate.
+function buildXPostPlan(rawTopic: string | undefined): Plan {
+  const topic = (rawTopic ?? 'now-playing').trim().replace(/["']/g, '').slice(0, 80) || 'now-playing'
+  const args = {
+    platform: 'x',
+    topic,
+    workspace: '/home/tripp/.openclaw/workspace/PretoriaFields',
+    context_files: ['README.md', 'PLAYBOOK.md', 'SOCIAL-MEDIA-STRATEGY.md'],
+  }
+  return {
+    class: 'workflow',
+    summary: `Drafting a WPFQ X/Twitter post${topic === 'now-playing' ? '' : ` about: ${topic}`}, then pausing for publish confirmation.`,
+    steps: [
+      {
+        target: 'prime',
+        command_type: 'social-draft',
+        args: { ...args, dry_run: true },
+        description: 'Read PretoriaFields docs + live now-playing, draft the ≤280-char X post',
+      },
+      {
+        target: 'prime',
+        command_type: 'social-post',
+        args: { ...args, dry_run: false },
+        description: 'Publish the X post to @xAIDJPretoria (T3 — typed confirmation required)',
+      },
+    ],
+  }
+}
+
 // ─── Workflow plans ─────────────────────────────────────────────────────
 
 const WORKFLOW_PLANS: PatternToPlan[] = [
+  // Social posting for WPFQ. Target Prime first so the handler can read the
+  // PretoriaFields workspace docs (PLAYBOOK + social strategy) before it
+  // talks to station systems or any external API. `social-post` is tier 3,
+  // so live publishing pauses for typed confirmation instead of blindly
+  // posting to X.
+  {
+    pattern: /\b(post|tweet|send)\b.*\b(x|twitter)\b.*\b(radio|wpfq|pretoria|now\s*playing|station)\b/i,
+    build: () => ({
+      class: 'workflow',
+      summary: 'Preparing a WPFQ X/Twitter post using PretoriaFields workspace context.',
+      steps: [
+        {
+          target: 'prime',
+          command_type: 'social-draft',
+          args: {
+            platform: 'x',
+            topic: 'now-playing',
+            dry_run: true,
+            workspace: '/home/tripp/.openclaw/workspace/PretoriaFields',
+            context_files: ['README.md', 'PLAYBOOK.md', 'SOCIAL-MEDIA-STRATEGY.md'],
+          },
+          description: 'Read PretoriaFields README/playbook/social strategy and draft the WPFQ X/Twitter post',
+        },
+        {
+          target: 'prime',
+          command_type: 'social-post',
+          args: {
+            platform: 'x',
+            topic: 'now-playing',
+            dry_run: false,
+            workspace: '/home/tripp/.openclaw/workspace/PretoriaFields',
+            context_files: ['README.md', 'PLAYBOOK.md', 'SOCIAL-MEDIA-STRATEGY.md'],
+          },
+          description: 'Read PretoriaFields docs, query current WPFQ track, then publish an X/Twitter now-playing post after confirmation',
+        },
+      ],
+    }),
+  },
+  {
+    pattern: /\b(radio|wpfq|pretoria|now\s*playing|station)\b.*\b(post|tweet|send)\b.*\b(x|twitter)\b/i,
+    build: () => ({
+      class: 'workflow',
+      summary: 'Preparing a WPFQ X/Twitter post using PretoriaFields workspace context.',
+      steps: [
+        {
+          target: 'prime',
+          command_type: 'social-draft',
+          args: {
+            platform: 'x',
+            topic: 'now-playing',
+            dry_run: true,
+            workspace: '/home/tripp/.openclaw/workspace/PretoriaFields',
+            context_files: ['README.md', 'PLAYBOOK.md', 'SOCIAL-MEDIA-STRATEGY.md'],
+          },
+          description: 'Read PretoriaFields README/playbook/social strategy and draft the WPFQ X/Twitter post',
+        },
+        {
+          target: 'prime',
+          command_type: 'social-post',
+          args: {
+            platform: 'x',
+            topic: 'now-playing',
+            dry_run: false,
+            workspace: '/home/tripp/.openclaw/workspace/PretoriaFields',
+            context_files: ['README.md', 'PLAYBOOK.md', 'SOCIAL-MEDIA-STRATEGY.md'],
+          },
+          description: 'Read PretoriaFields docs, query current WPFQ track, then publish an X/Twitter now-playing post after confirmation',
+        },
+      ],
+    }),
+  },
+
+  // W21 — Process A general entries. Plain "draft a tweet about X" /
+  // "post to X about the morning show" with no explicit WPFQ token.
+  // Two constrained patterns (so a bare "publish the morning show"
+  // can't be hijacked into an X post): (1) literal tweet / x-post
+  // token, (2) post|publish|share + explicit "to/on x|twitter". Both
+  // build the same 2-step plan: social-draft (T1, auto) → social-post
+  // (T3, typed-confirm). Topic extracted after about/re/covering;
+  // defaults to now-playing. Draft is surfaced at the confirm gate
+  // ("confirm at publish only").
+  {
+    pattern: /\b(?:tweet|x[-\s]?post)\b(?:[^.\n]*?\b(?:about|re|covering)\s+(?<topic>[^.\n]{2,80}))?/i,
+    build: (m) => buildXPostPlan(m.groups?.topic),
+  },
+  {
+    pattern: /\b(?:post|publish|share|put\s+out)\b[^.\n]{0,40}\b(?:to\s+|on\s+)(?:x|twitter)\b(?:[^.\n]*?\b(?:about|re|covering)\s+(?<topic>[^.\n]{2,80}))?/i,
+    build: (m) => buildXPostPlan(m.groups?.topic),
+  },
+
+  // W21 — Process B: morning-show production. Codifies the pipeline
+  // that built the 2026-05-18 show: research → write → render →
+  // pull-songs → produce → preview (one auto T1 build step), then a
+  // T3 publish step (AutoImporter + verify) that the kernel parks in
+  // awaiting_input for typed confirmation. Decision: "preview gate
+  // only" — the human checkpoint is the preview shown at the publish
+  // gate; scripts are auto-approved. Optional date token: a
+  // YYYY-MM-DD, a weekday name, "tomorrow", or "next <weekday>";
+  // defaults to the next scheduled (Mon–Fri) show.
+  {
+    pattern: /\bmorning[-\s]?show\b(?:[^.\n]*?\b(?<date>\d{4}-\d{2}-\d{2}|tomorrow|today|next\s+\w+day|monday|tuesday|wednesday|thursday|friday))?/i,
+    build: (m) => {
+      const date = (m.groups?.date ?? 'next').trim().toLowerCase()
+      return {
+        class: 'workflow',
+        summary: `Morning-show pipeline for ${date === 'next' ? 'the next scheduled show' : date}: build → preview, then pause for publish confirmation.`,
+        steps: [
+          {
+            target: 'prime',
+            command_type: 'morning-show-build',
+            args: { date, hours: 'all' },
+            description: 'research → write → render → pull-songs → produce → preview (auto; scripts pre-approved)',
+          },
+          {
+            target: 'prime',
+            command_type: 'morning-show-publish',
+            args: { date },
+            description: 'AutoImporter publish + verify Playlists rows (T3 — typed confirmation; preview shown at the gate)',
+          },
+        ],
+      }
+    },
+  },
+
   // W19b — "morning check" / "morning briefing" / "daily briefing".
   // A single cross-lieutenant workflow that gathers the four
   // most-asked-about signals in one round-trip: clinical schedule

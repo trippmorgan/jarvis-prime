@@ -31,9 +31,13 @@ export const COMMAND_TIER: Record<string, number> = {
   'read-experiment':   0,
   'rerun-experiment':  1,
   'ollama-operation':  1,
+  'social-draft':      1,
+  'morning-show-build':   1,
   'run-diagnostic':    1,
   'restart-service':   2,
   'execute-script':    2,
+  'social-post':       3,
+  'morning-show-publish': 3,
 }
 
 // W17.3 — per-command poll timeout override. Commands that involve LLM
@@ -44,6 +48,7 @@ const POLL_TIMEOUT_OVERRIDE_MS: Record<string, number> = {
   'rerun-experiment': 240_000,   // Frank brain ~30-180s per substantive Q
   'ollama-operation': 120_000,
   'patient-schedule': 100_000,   // Athena CDP frameset scrape ~60-80s
+  'morning-show-build':  120_000, // plan/status mode is fast; headroom if execute=true kicks the pipeline
 }
 
 export function pollTimeoutFor(command_type: string, fallback: number = DEFAULT_POLL_TIMEOUT_MS): number {

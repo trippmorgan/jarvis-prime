@@ -14,6 +14,14 @@ interface ClassRule {
 
 // Order matters — first match wins. More specific rules go first.
 const RULES: ClassRule[] = [
+  // W21 — explicit "post/tweet/send … X … (wpfq|now-playing|station)"
+  // outranks the station query rules below: an intent to *publish to X*
+  // about the now-playing track is a workflow, not a now-playing query.
+  // These require post-verb + x/twitter, so they never steal a plain
+  // "what's playing" / "station check".
+  { pattern: /\b(post|tweet|send)\b.*\b(x|twitter)\b.*\b(radio|wpfq|pretoria|now\s*playing|station)\b/i, klass: 'workflow' },
+  { pattern: /\b(radio|wpfq|pretoria|now\s*playing|station)\b.*\b(post|tweet|send)\b.*\b(x|twitter)\b/i, klass: 'workflow' },
+
   // Station / radio queries → dj-jarvis (before generic status so "wpfq health check" routes to station)
   { pattern: /\b(what'?s\s+playing|now\s+playing|on\s+(?:the\s+)?air|current\s+(?:song|track))\b/i, klass: 'query' },
   { pattern: /\b(station|wpfq|radio|pretoria)\b.*\b(check|status|health|playing|coverage|upcoming|logs?)\b/i, klass: 'query' },
@@ -31,6 +39,24 @@ const RULES: ClassRule[] = [
 
   // Clinical query (PHI path; PHI redactor must fire)
   { pattern: /\b(patient\s+schedule|morning\s+report|surgery\s+list|or\s+schedule|today'?s\s+cases|tomorrow'?s\s+cases)\b/i, klass: 'query' },
+
+  // W21 — Process A (X post), general phrasings. A plain "draft a tweet
+  // about the new morning show" still orchestrates instead of falling
+  // to chat. social-draft is T1 (auto), social-post is T3 (typed
+  // confirm) — i.e. "confirm at publish only". (The WPFQ-specific
+  // post-to-X rules live at the very top, above the station queries.)
+  { pattern: /\b(post|send|write|draft|compose|publish|do|make|create|put\s+out)\b[^.\n]{0,40}\b(a\s+|an\s+|the\s+)?(tweet|x[-\s]?post)\b/i, klass: 'workflow' },
+  { pattern: /\b(post|publish|share|put\s+out)\b[^.\n]{0,60}\b(to\s+|on\s+)?(x|twitter)\b/i, klass: 'workflow' },
+  { pattern: /\btweet\s+(about|that|this|out)\b/i, klass: 'workflow' },
+
+  // W21 — Process B (morning-show production pipeline). Distinct from
+  // the W19b "morning briefing/sitrep" rule below (different tokens —
+  // "morning show" ≠ "morning briefing"). research→write→render→
+  // pull-songs→produce→preview is T1 (auto, preview gate); publish is
+  // T3 (typed confirm). Tripp's own phrasing — "designed and published
+  // the morning show" — matches the first rule via "design".
+  { pattern: /\b(?:build|produc|mak|creat|design|generat|prep|publish|preview|deploy|render|deliver|do|run)\w*\b[^.\n]{0,40}\bmorning[-\s]?show\b/i, klass: 'workflow' },
+  { pattern: /\bmorning[-\s]?show\b[^.\n]{0,40}\b(?:build|produc|publish|preview|status|pipeline|production|deploy|render)\w*\b/i, klass: 'workflow' },
 
   // Imperative workflow ("let's work on", "build", "debug", named services)
   { pattern: /^(let'?s|we should|please|hey jarvis,?)\s+(work on|build|debug|investigate|look into|fix|set up)/i, klass: 'workflow' },

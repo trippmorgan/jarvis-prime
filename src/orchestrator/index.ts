@@ -87,12 +87,24 @@ export async function orchestrate(
   const events: ExecEvent[] = []
 
   if (plan.steps.length === 0) {
+    // No concrete plan (no hard-coded template matched and the LLM
+    // planner couldn't form one). The orchestrator must NOT claim the
+    // message and stonewall with a canned "no plan template yet" line —
+    // that suppresses the conversational brain entirely (the bug Tripp
+    // hit: every solo/deep-brain message returning the dead-end string).
+    //
+    // Contract: the orchestrator only takes ownership of a message when
+    // it has an actionable plan or a status/query fan-out. Otherwise it
+    // yields by reporting class:'chat' with an empty reply, so the
+    // Telegram hook delegates to the normal dual-brain handler. A
+    // classifier over-promotion is now harmless — it just flows to
+    // conversation instead of dead-ending.
     return {
-      class: klass,
+      class: 'chat',
       session_id: opts.sessionId,
       events: [],
-      final_reply: plan.summary,
-      completed: false,
+      final_reply: '',
+      completed: true,
     }
   }
 
@@ -124,11 +136,24 @@ function composeFinalReply(plan: { summary: string }, events: ExecEvent[], klass
   const awaiting = events.find((e) => e.kind === 'awaiting_confirm')
 
   if (awaiting) {
-    return [
-      `${plan.summary}`,
-      `\n⏸ Step ${awaiting.step_number}/${awaiting.total_steps} (${awaiting.step?.command_type}) is **awaiting confirmation**.`,
-      `Reply with: \`${awaiting.required_phrase ?? '(typed-phrase)'}\` to proceed.`,
-    ].join('\n')
+    // W21 — surface what is being confirmed. A T3 gate with no preview
+    // ("reply with phrase to proceed") is the exact "generic/unusable"
+    // UX the SuperServer diagnosis flagged. The step(s) before the gate
+    // (e.g. social-draft, morning-show-build) have already completed and
+    // carry the draft text / preview summary — render them so Tripp sees
+    // the artifact before typing the confirm phrase.
+    const out = [`${plan.summary}`, '']
+    for (const ev of completed) {
+      const ctx = (ev.result as Record<string, unknown>) ?? {}
+      out.push(`✅ ${ev.step?.target} ${ev.step?.command_type}:`)
+      out.push(renderResult(ctx))
+      out.push('')
+    }
+    out.push(
+      `⏸ Step ${awaiting.step_number}/${awaiting.total_steps} (${awaiting.step?.command_type}) is **awaiting confirmation** — review the above.`,
+      `Reply with: \`${awaiting.required_phrase ?? '(typed-phrase)'}\` to publish, or ignore to abort.`,
+    )
+    return out.join('\n')
   }
 
   // Status class always renders the table, even when some lieutenants
@@ -155,7 +180,18 @@ function composeFinalReply(plan: { summary: string }, events: ExecEvent[], klass
   }
 
   if (completed.length === 0) {
-    return plan.summary
+    // No step produced a result and nothing explicitly failed: the
+    // planner couldn't form an actionable step for this request. Be
+    // honest instead of emitting a bare summary line that reads like a
+    // silent success ("workflow complete"). This is the path the
+    // SuperServer diagnosis flagged as "generic/unusable".
+    return [
+      plan.summary,
+      '',
+      "⚠️ I couldn't turn that into an actionable plan, so nothing ran.",
+      'Rephrase it as a concrete request — e.g. "network status",',
+      '"frank health", or "now playing on the station".',
+    ].join('\n')
   }
 
   const lines = [plan.summary, '']
@@ -241,6 +277,53 @@ function renderResult(ctx: Record<string, unknown>): string {
     return parts.length > 0 ? `ok · ${parts.join(' · ')}` : 'ok'
   }
 
+  // Social post results — show the generated/published text and the docs
+  // that were read before acting. Live publish is guarded by tier_action=3.
+  if (ctx.command_type === 'social-draft' || ctx.command_type === 'social-post' || typeof ctx.post_text === 'string') {
+    const platform = typeof ctx.platform === 'string' ? ctx.platform : 'social'
+    const mode = ctx.dry_run === true ? 'draft' : ctx.posted === true ? 'posted' : 'not posted'
+    const lines = [`${platform.toUpperCase()} ${mode}`]
+    if (typeof ctx.post_text === 'string') lines.push(`  ${ctx.post_text}`)
+    if (typeof ctx.tweet_id === 'string') lines.push(`  id: ${ctx.tweet_id}`)
+    if (Array.isArray(ctx.context_files_read)) lines.push(`  context: ${ctx.context_files_read.join(', ')}`)
+    if (typeof ctx.error === 'string') lines.push(`  error: ${ctx.error}`)
+    return lines.join('\n')
+  }
+
+  // W21 — morning-show pipeline (Process B). The handler returns a
+  // plan/status snapshot (mode=plan|started|done) for build, and a
+  // deploy summary for publish. Surface the pipeline stages, the show
+  // dir, which artifacts already exist, and the AutoImporter guardrails.
+  if (
+    (typeof ctx.command_type === 'string' && ctx.command_type.startsWith('morning-show')) ||
+    typeof ctx.show_date === 'string' ||
+    Array.isArray(ctx.pipeline)
+  ) {
+    const stage = String(ctx.stage ?? (String(ctx.command_type ?? '').endsWith('publish') ? 'publish' : 'build'))
+    const mode = String(ctx.mode ?? 'plan')
+    const date = String(ctx.show_date ?? ctx.date ?? '?')
+    const lines = [`🎙 morning-show ${stage} · ${date} · ${mode}`]
+    if (typeof ctx.error === 'string') lines.push(`  ⚠️ ${ctx.error}`)
+    if (Array.isArray(ctx.pipeline)) {
+      for (const s of ctx.pipeline as Array<Record<string, unknown>>) {
+        const done = s.exists === true ? '✓' : s.exists === false ? '·' : ' '
+        lines.push(`  ${done} ${s.stage}${s.script ? ` → ${s.script}` : ''}`)
+      }
+    }
+    if (typeof ctx.hours === 'string' || typeof ctx.hours === 'number') lines.push(`  hours: ${ctx.hours}`)
+    if (typeof ctx.show_dir === 'string') lines.push(`  dir: ${ctx.show_dir}`)
+    if (Array.isArray(ctx.previews) && ctx.previews.length > 0) {
+      lines.push(`  previews: ${(ctx.previews as string[]).slice(0, 4).join(', ')}`)
+    }
+    if (typeof ctx.asset_count === 'number') lines.push(`  ${ctx.asset_count} deploy assets`)
+    if (typeof ctx.deploy_plan_path === 'string') lines.push(`  deploy-plan: ${ctx.deploy_plan_path}`)
+    if (typeof ctx.verified === 'boolean') lines.push(`  verified: ${ctx.verified ? 'yes — Playlists rows present' : 'NO'}`)
+    if (Array.isArray(ctx.guardrails) && ctx.guardrails.length > 0) {
+      lines.push(`  guardrails: ${(ctx.guardrails as string[]).slice(0, 3).join(' · ')}`)
+    }
+    return lines.join('\n')
+  }
+
   // Station query results — surface the structured fields from dj-jarvis
   if (typeof ctx.query === 'string') {
     const lines: string[] = []
@@ -304,3 +387,6 @@ export type { IntentClass, Plan, PlanStep, ExecEvent, OrchestrationResult, Teleg
 export { classifyIntent } from './classify.js'
 export { buildPlan } from './plan.js'
 export { executePlan, tierFor, COMMAND_TIER } from './execute.js'
+// W21 — pure render fns exported for unit tests (confirm-gate preview,
+// morning-show + social rendering). No side effects.
+export { composeFinalReply, renderResult }
