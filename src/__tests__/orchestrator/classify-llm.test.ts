@@ -158,3 +158,38 @@ describe('classifyIntentWithLLM — safety + cache', () => {
     expect(events[0].parsed).toBe('query')
   })
 })
+
+describe('W21.6 — circuit breaker stops the slow-Frank chat tax', () => {
+  beforeEach(() => _resetClassifyLLMCacheForTests())
+
+  const failing = (counter: { n: number }): typeof fetch =>
+    (async () => {
+      counter.n += 1
+      throw new Error('frank unreachable')
+    }) as unknown as typeof fetch
+
+  it('opens after 2 consecutive failures, then skips the LLM entirely', async () => {
+    const c = { n: 0 }
+    const ff = failing(c)
+    // 2 chat-regex inputs that reach the LLM and fail → breaker trips
+    expect(await classifyIntentWithLLM('tell me a story please', { fetchFn: ff })).toBe('chat')
+    expect(await classifyIntentWithLLM('what is your favorite colour', { fetchFn: ff })).toBe('chat')
+    expect(c.n).toBe(2)
+    // breaker now open — these must NOT hit fetch (instant chat)
+    expect(await classifyIntentWithLLM('ramble about the ocean', { fetchFn: ff })).toBe('chat')
+    expect(await classifyIntentWithLLM('musings on jazz history', { fetchFn: ff })).toBe('chat')
+    expect(c.n).toBe(2) // unchanged — zero network wait while open
+  })
+
+  it('a success closes the breaker (self-heals when Frank recovers)', async () => {
+    const c = { n: 0 }
+    const fail = failing(c)
+    await classifyIntentWithLLM('tell me a story please', { fetchFn: fail }) // fail #1
+    // A successful LLM call (regex still 'chat', LLM agrees) resets the count.
+    expect(await classifyIntentWithLLM('what do you think about the weather', { fetchFn: fakeFetch('chat') })).toBe('chat')
+    // Next failure therefore starts from 0, not the trip threshold →
+    // it still runs (breaker did NOT open).
+    expect(await classifyIntentWithLLM('ramble about the ocean please', { fetchFn: fail })).toBe('chat')
+    expect(c.n).toBe(2) // both failing calls actually executed
+  })
+})

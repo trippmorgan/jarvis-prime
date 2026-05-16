@@ -34,11 +34,26 @@ const VALID_CLASSES: ReadonlySet<IntentClass> = new Set([
 
 const DEFAULT_OLLAMA_URL = 'http://192.168.0.108:11434/api/chat'
 const DEFAULT_MODEL = 'gemma4:e2b'
-// 10s default: covers cold-start (~9s gemma4:e2b model load). Once
-// warm, calls return in <100ms — the timeout is a safety net not a
-// latency budget. server.ts preheats on boot via warmupClassifierLLM().
-const DEFAULT_TIMEOUT_MS = 10_000
+// W21.6 — 1.5s hard cap. This is a LATENCY BUDGET, not just a safety
+// net: the LLM only runs when regex already returned 'chat', so a slow
+// Frank was taxing every conversational turn ~6.5s for a second opinion
+// that almost always agreed. On timeout we keep the regex 'chat'. Cold
+// start is handled by warmupClassifierLLM() + the circuit breaker
+// below, not by a long per-call wait. Override: JARVIS_LLM_CLASSIFIER_TIMEOUT_MS.
+const DEFAULT_TIMEOUT_MS = 1_500
 const CACHE_MAX = 100
+
+// W21.6 — circuit breaker. When Frank is slow/unreachable, stop paying
+// the per-turn timeout: after BREAKER_TRIP consecutive LLM failures
+// (timeout / error / unparseable) the breaker opens for
+// BREAKER_COOLDOWN_MS — every chat turn returns instantly (regex
+// 'chat') with zero network wait. One success closes it again, so it
+// self-heals when Frank recovers. Behaviour is unchanged while Frank is
+// healthy (tests inject a fast fake fetch → breaker never trips).
+const BREAKER_TRIP = 2
+const BREAKER_COOLDOWN_MS = 120_000
+let _consecutiveLLMFailures = 0
+let _breakerOpenUntil = 0
 
 // Treat anything shorter than this as "obvious chat" and skip the LLM
 // call entirely. "thanks!" / "hi" / "ok" don't deserve a network round-trip.
@@ -115,6 +130,8 @@ function cacheSet(key: string, value: IntentClass): void {
 
 export function _resetClassifyLLMCacheForTests(): void {
   cache.clear()
+  _consecutiveLLMFailures = 0
+  _breakerOpenUntil = 0
 }
 
 /**
@@ -210,8 +227,12 @@ async function fetchOllamaClassification(
  *  Config from env (overridable per-call for tests):
  *    JARVIS_LLM_CLASSIFIER_ENABLED  default true
  *    JARVIS_LLM_CLASSIFIER_URL      default Frank brain
- *    JARVIS_LLM_CLASSIFIER_MODEL    default "frank"
- *    JARVIS_LLM_CLASSIFIER_TIMEOUT_MS  default 2000
+ *    JARVIS_LLM_CLASSIFIER_MODEL    default "gemma4:e2b"
+ *    JARVIS_LLM_CLASSIFIER_TIMEOUT_MS  default 1500 (W21.6)
+ *
+ *  W21.6 latency: regex-chat turns now cost ≤1.5s for a Frank second
+ *  opinion, and after BREAKER_TRIP consecutive Frank failures, 0s for
+ *  BREAKER_COOLDOWN_MS (self-healing). Was ~6.5s every chat turn.
  */
 export async function classifyIntentWithLLM(
   text: string,
@@ -255,11 +276,38 @@ export async function classifyIntentWithLLM(
     return cached
   }
 
+  // W21.6 — breaker open: Frank has been failing; don't pay the
+  // timeout. Regex already said 'chat', so that's the answer.
+  if (Date.now() < _breakerOpenUntil) {
+    config.onLLMCall?.({
+      text: trimmed,
+      raw: '(breaker-open)',
+      parsed: 'chat',
+      durationMs: 0,
+      ok: false,
+      fromCache: false,
+    })
+    return 'chat'
+  }
+
   const fetchFn = config.fetchFn ?? fetch
   const start = Date.now()
   const result = await fetchOllamaClassification(trimmed, cfg, fetchFn)
   const durationMs = Date.now() - start
   const parsed: IntentClass = result.parsed ?? 'chat'
+
+  // W21.6 — breaker accounting. A null parse means timeout/error/
+  // unparseable; N in a row trips the breaker. Any success closes it.
+  if (result.parsed === null) {
+    _consecutiveLLMFailures += 1
+    if (_consecutiveLLMFailures >= BREAKER_TRIP) {
+      _breakerOpenUntil = Date.now() + BREAKER_COOLDOWN_MS
+      _consecutiveLLMFailures = 0
+    }
+  } else {
+    _consecutiveLLMFailures = 0
+    _breakerOpenUntil = 0
+  }
 
   // Only cache valid responses — if the LLM was unreachable we want to
   // retry next time.
