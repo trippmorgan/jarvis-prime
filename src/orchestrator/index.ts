@@ -26,10 +26,66 @@ export interface OrchestrateOptions {
   llmClassifierEnabled?: boolean
 }
 
+// W21.4 — Prime's conversational brain doesn't know what the
+// orchestrator can do, so "what skills / list orchestration skills"
+// got a generic GSD answer. This is the single source of truth for the
+// orchestrated workflow vocabulary, returned deterministically.
+const SKILLS_INTENT =
+  /\b(list|show|what(?:'s| are)?|which)\b[^.\n]*\b(orchestrat\w*|workflow|skills?|commands?|can you (?:do|run))\b|\bwhat can you (?:do|orchestrate|run)\b|\borchestrat\w* (?:skills?|commands?|menu|help)\b/i
+
+const ORCHESTRATOR_SKILLS = [
+  '*Jarvis Prime — orchestrated workflows*',
+  '(plain English in Telegram; tier-3 steps pause for your confirm)',
+  '',
+  '📻 *WPFQ radio*',
+  '• "now playing" / "station check" / "dpl coverage" / "play history" / "upcoming" / "station logs"',
+  '• "build the morning show [date]" → research→…→preview, then *publish* gate (T3)',
+  '🐦 *Social*',
+  '• "draft a tweet about <topic>" → draft, then *publish* gate (T3 → @xAIDJPretoria)',
+  '🏥 *Clinical* — "patient schedule" / "OR schedule" (redacted; PHI stays on-box)',
+  '🧠 *Frank* — "list/read/rerun frank experiment <name>"',
+  '🛰 *Ops* — "network status", "morning briefing", "restart <svc> on <node>", "inspect mcp", "chrome-cdp status"',
+  '',
+  'At a confirm gate: reply *publish* to proceed or *cancel* to abort.',
+].join('\n')
+
+// W21.4 — a precise, human label for what a gated step will actually
+// do, so the confirm/abort/hold messages are unambiguous (a tweet vs.
+// the morning show vs. a station mutation).
+export function actionLabel(commandType?: string, args?: Record<string, unknown>): string {
+  const a = args ?? {}
+  switch (commandType) {
+    case 'social-post':
+      return `post the X/Twitter ${a.topic && a.topic !== 'now-playing' ? `post about "${String(a.topic).slice(0, 40)}"` : 'now-playing post'} to @xAIDJPretoria`
+    case 'morning-show-publish':
+      return `PUBLISH THE MORNING SHOW${a.date ? ` (${a.date})` : ''} to the WPFQ playout`
+    case 'restart-service':
+      return `restart ${a.service ?? 'service'}${a.target ? ` on ${a.target}` : ''}`
+    case 'execute-script':
+      return `run script ${a.script ?? a.path ?? ''}`.trim()
+    case 'social-draft':
+      return 'prepare an X/Twitter draft'
+    default:
+      return commandType ?? 'this action'
+  }
+}
+
 export async function orchestrate(
   message: TelegramMessage,
   opts: OrchestrateOptions = {},
 ): Promise<OrchestrationResult> {
+  // W21.4 — deterministic skills catalog (before classify): keeps Prime
+  // honest about its own orchestration vocabulary.
+  if (message.text && SKILLS_INTENT.test(message.text.trim())) {
+    return {
+      class: 'query',
+      session_id: opts.sessionId,
+      events: [],
+      final_reply: ORCHESTRATOR_SKILLS,
+      completed: true,
+    }
+  }
+
   // W18 — two-stage classify: regex first (fast, free), Frank-brain
   // LLM second only when regex returns 'chat'. Falls back to 'chat' if
   // Frank is unreachable. See classify-llm.ts for the prompt + cache.
@@ -149,9 +205,12 @@ function composeFinalReply(plan: { summary: string }, events: ExecEvent[], klass
       out.push(renderResult(ctx))
       out.push('')
     }
+    // W21.4 — name the EXACT action. "publish" confirmed a morning-show
+    // when Tripp meant a tweet because the gate said only "publish".
     out.push(
-      `⏸ Step ${awaiting.step_number}/${awaiting.total_steps} (${awaiting.step?.command_type}) is **awaiting confirmation** — review the above.`,
-      `Reply **publish** to post (or *cancel* to abort).`,
+      `⏸ **Confirm: ${actionLabel(awaiting.step?.command_type, awaiting.step?.args)}**`,
+      `(step ${awaiting.step_number}/${awaiting.total_steps}) — review above.`,
+      `Reply **publish** to do exactly that, or *cancel* to abort.`,
     )
     return out.join('\n')
   }

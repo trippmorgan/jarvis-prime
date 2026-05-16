@@ -20,7 +20,7 @@
 //      POST /envelopes/:id/cancel (abort) and the new message is
 //      handled normally. Before this, typing the phrase did nothing.
 
-import { orchestrate, classifyIntent, renderResult } from './index.js'
+import { orchestrate, classifyIntent, renderResult, actionLabel } from './index.js'
 import type { ExecEvent } from './types.js'
 
 const KERNEL_URL = process.env.KERNEL_URL ?? 'http://100.80.111.84:3000'
@@ -35,6 +35,7 @@ interface PendingConfirm {
   envelopeId: string
   phrase: string
   commandType: string
+  label: string
   createdAt: number
 }
 // chatId → pending T3 confirmation. Module-scoped: one poller process.
@@ -156,7 +157,7 @@ export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
             )
             return
           }
-          await cfg.deliver(chatId, `⏳ Confirmed \`${pend.commandType}\` — executing…`)
+          await cfg.deliver(chatId, `⏳ Confirmed — now going to ${pend.label}…`)
           const out = await pollConfirmResult(pend.envelopeId)
           await cfg.deliver(chatId, out)
           return
@@ -167,15 +168,15 @@ export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
             method: 'POST',
             body: JSON.stringify({ reason: 'user declined' }),
           })
-          await cfg.deliver(chatId, `✋ Aborted — \`${pend.commandType}\` not published.`)
+          await cfg.deliver(chatId, `✋ Aborted — did NOT ${pend.label}.`)
           return
         }
-        // AMBIGUOUS: keep the gate armed, re-prompt. Never silently
-        // publish, cancel, or drop into chat — that loses the gate and
-        // confused Tripp ("Publish"/"Confirm" → conversational answer).
+        // AMBIGUOUS: keep the gate armed, re-prompt with the EXACT
+        // pending action (W21.4 — "publish" once confirmed a morning
+        // show when Tripp meant a tweet; never leave it vague).
         await cfg.deliver(
           chatId,
-          `⏸ Still holding \`${pend.commandType}\`. Reply *publish* to post, or *cancel* to abort. (Auto-expires in a few minutes.)`,
+          `⏸ Still waiting on your call: about to **${pend.label}**.\nReply *publish* to do that, or *cancel* to abort. (Auto-expires soon.)`,
         )
         return
       }
@@ -199,10 +200,20 @@ export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
             } catch { /* swallow */ }
           } else if (ev.kind === 'awaiting_confirm') {
             if (ev.envelope_id && ev.required_phrase) {
+              const label = actionLabel(ev.step?.command_type, ev.step?.args)
+              const prev = pendingConfirms.get(chatId)
+              if (prev && prev.envelopeId !== ev.envelope_id) {
+                // A new gate replaces an un-answered one — say so, so a
+                // later "publish" can't silently confirm the wrong thing.
+                try {
+                  await cfg.deliver(chatId, `↻ (Dropped the earlier un-confirmed step: ${prev.label}.)`)
+                } catch { /* swallow */ }
+              }
               pendingConfirms.set(chatId, {
                 envelopeId: ev.envelope_id,
                 phrase: ev.required_phrase,
                 commandType: ev.step?.command_type ?? 'command',
+                label,
                 createdAt: Date.now(),
               })
             }

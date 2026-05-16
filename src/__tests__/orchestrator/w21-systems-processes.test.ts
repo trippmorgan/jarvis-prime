@@ -7,6 +7,8 @@ import {
   composeFinalReply,
   renderResult,
   COMMAND_TIER,
+  actionLabel,
+  orchestrate,
 } from '../../orchestrator/index.js'
 import { classifyConfirmReply } from '../../orchestrator/telegram-hook.js'
 import type { ExecEvent } from '../../orchestrator/types.js'
@@ -101,12 +103,13 @@ describe('W21 confirm-gate UX — the draft/preview is shown at the T3 gate', ()
     },
   ]
 
-  it('renders the draft, then a natural confirm instruction (W21.2)', () => {
+  it('renders the draft, then a named confirm instruction (W21.2/W21.4)', () => {
     const out = composeFinalReply({ summary: 'Drafting a WPFQ X post.' }, events, 'workflow')
     expect(out).toContain(draftText)
-    expect(out).toContain('awaiting confirmation')
-    // W21.2 — the gate no longer makes the human type a cryptic phrase;
-    // it says "Reply publish". The draft must precede that instruction.
+    // W21.4 — the gate names the EXACT action (not a generic "publish")
+    // so it can't be confused with the morning show.
+    expect(out).toContain('Confirm:')
+    expect(out).toContain('X/Twitter')
     expect(out.toLowerCase()).toContain('publish')
     expect(out.indexOf(draftText)).toBeLessThan(out.toLowerCase().indexOf('reply'))
   })
@@ -150,6 +153,32 @@ describe('W21.2 — confirm gate accepts natural affirmatives', () => {
   it('anything else is ambiguous (gate held, not silently lost)', () => {
     expect(classifyConfirmReply('what time is the show', PHRASE)).toBe('ambiguous')
     expect(classifyConfirmReply('actually make it about grunge night', PHRASE)).toBe('ambiguous')
+  })
+})
+
+describe('W21.4 — gate names the exact action; skills are discoverable', () => {
+  it('actionLabel distinguishes a tweet from the morning show', () => {
+    expect(actionLabel('social-post', {})).toMatch(/X\/Twitter.*@xAIDJPretoria/)
+    expect(actionLabel('morning-show-publish', { date: '2026-05-18' }))
+      .toMatch(/MORNING SHOW \(2026-05-18\)/)
+    // The two must never read the same — that was the "publish" mix-up.
+    expect(actionLabel('social-post', {})).not.toEqual(
+      actionLabel('morning-show-publish', { date: '2026-05-18' }),
+    )
+  })
+  it('"draft a tweet about the morning show" still routes to social, not morning-show', () => {
+    const p = buildPlan('draft a tweet about the morning show', 'workflow')
+    expect(p.steps.map((s) => s.command_type)).toEqual(['social-draft', 'social-post'])
+  })
+  it('orchestrate returns the skills catalog deterministically (no LLM, no chat fallthrough)', async () => {
+    const r = await orchestrate(
+      { chat_id: 'c', text: 'list orchestration skills', from: 'u' },
+      { llmClassifierEnabled: false },
+    )
+    expect(r.class).not.toBe('chat')
+    expect(r.final_reply).toContain('orchestrated workflows')
+    expect(r.final_reply.toLowerCase()).toContain('morning show')
+    expect(r.final_reply.toLowerCase()).toContain('tweet')
   })
 })
 
