@@ -182,6 +182,22 @@ describe('W21.4 — gate names the exact action; skills are discoverable', () =>
   })
 })
 
+describe('W21.5 — "what did we do today" is a factual recap, not radio', () => {
+  it('recap phrasings return a deterministic git-backed summary, not chat', async () => {
+    for (const q of ['what have we done today', 'what did we accomplish today', "today's progress"]) {
+      const r = await orchestrate({ chat_id: 'c', text: q, from: 'u' }, { llmClassifierEnabled: false })
+      expect(r.class).not.toBe('chat')
+      expect(r.final_reply).toContain('🗓')
+      expect(r.final_reply.toLowerCase()).not.toContain('pipeline is empty')
+    }
+  })
+  it('does not hijack the W19b cross-lieutenant "sitrep/briefing"', async () => {
+    const r = await orchestrate({ chat_id: 'c', text: 'morning briefing', from: 'u' }, { llmClassifierEnabled: false })
+    // morning briefing must NOT return the git recap (no 🗓 header)
+    expect(r.final_reply).not.toContain('🗓')
+  })
+})
+
 describe('W21 renderResult — morning-show snapshot', () => {
   it('renders stage table + previews + deploy summary', () => {
     const buildCtx = {

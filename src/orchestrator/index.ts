@@ -12,7 +12,11 @@ import { buildPlanWithLLM } from './plan-llm.js'
 import { executePlan } from './execute.js'
 import { statusFanOutSteps, renderStatusTable, parseStatusRow } from './status.js'
 import { emitTimelineFor } from './timeline.js'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { ExecEvent, OrchestrationResult, TelegramMessage } from './types.js'
+
+const execFileP = promisify(execFile)
 
 export interface OrchestrateOptions {
   /** If provided, ExecEvents are streamed via this callback for live
@@ -70,10 +74,60 @@ export function actionLabel(commandType?: string, args?: Record<string, unknown>
   }
 }
 
+// W21.5 — "what have we done today" was getting a confabulated radio
+// answer (the conversational brain has no factual "today" source and
+// the workspace context is radio-heavy). Answer it deterministically
+// from real git history instead. Deliberately NOT bare "sitrep" /
+// "briefing" — those belong to the W19b cross-lieutenant rule.
+const RECAP_INTENT =
+  /\b(?:what\s+(?:have|did|'?ve)\s+(?:we|you|i)\s+(?:done|do|accomplish\w*|work\w*|ship\w*|build\w*|get\s+done)|today'?s\s+(?:progress|recap|work|summary|commits?)|recap\s+(?:of\s+)?today|progress\s+(?:so\s+far|today)|what(?:'?s| is| has)\s+(?:been\s+)?(?:done|shipped)\s+today)\b/i
+
+const RECAP_REPOS: Array<[string, string]> = [
+  ['jarvis-prime', '/home/tripp/.openclaw/workspace/jarvis-prime'],
+  ['jarvis-os', '/home/tripp/.openclaw/workspace/jarvis-os'],
+  ['PretoriaFields', '/home/tripp/.openclaw/workspace/PretoriaFields'],
+]
+
+async function dailyRecap(): Promise<string> {
+  const blocks: string[] = []
+  for (const [name, path] of RECAP_REPOS) {
+    try {
+      const { stdout } = await execFileP(
+        'git',
+        ['-C', path, 'log', '--since=midnight', '--no-merges', '-n', '25', '--pretty=format:• %s'],
+        { timeout: 4000, maxBuffer: 1 << 20 },
+      )
+      const lines = stdout.trim()
+      if (lines) blocks.push(`*${name}*\n${lines}`)
+    } catch {
+      /* repo missing / git error — skip silently */
+    }
+  }
+  const today = new Date().toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', timeZone: 'America/New_York',
+  })
+  if (blocks.length === 0) {
+    return `🗓 *${today}* — no commits landed yet today. Work may be in progress (uncommitted) — ask me what I'm working on for the live state.`
+  }
+  return `🗓 *${today}* — shipped today:\n\n${blocks.join('\n\n')}`
+}
+
 export async function orchestrate(
   message: TelegramMessage,
   opts: OrchestrateOptions = {},
 ): Promise<OrchestrationResult> {
+  // W21.5 — factual daily recap (before classify), so "what did we do
+  // today" stops getting a confabulated radio reply.
+  if (message.text && RECAP_INTENT.test(message.text.trim())) {
+    return {
+      class: 'query',
+      session_id: opts.sessionId,
+      events: [],
+      final_reply: await dailyRecap(),
+      completed: true,
+    }
+  }
+
   // W21.4 — deterministic skills catalog (before classify): keeps Prime
   // honest about its own orchestration vocabulary.
   if (message.text && SKILLS_INTENT.test(message.text.trim())) {
