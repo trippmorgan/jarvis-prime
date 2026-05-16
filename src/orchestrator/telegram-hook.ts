@@ -129,6 +129,19 @@ export interface TelegramHookConfig {
   deliver: (chatId: string, text: string) => Promise<void>
   /** Called when the message is 'chat' class — delegates to the existing handler. */
   onChat: (chatId: string, text: string, userId: string) => Promise<void> | void
+  /**
+   * W21.7 — intent oversight. Re-reads an auto/deterministic reply
+   * against conversation context and returns a correction if it missed
+   * the user's actual intent. Optional: when absent, behaviour is
+   * unchanged. Runs fire-and-forget AFTER the fast reply, so it never
+   * delays the user. Must never throw (return {ok:true} on any doubt).
+   */
+  reviewIntent?: (args: {
+    chatId: string
+    userText: string
+    autoReply: string
+    klass: string
+  }) => Promise<{ ok: boolean; correction?: string }>
 }
 
 export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
@@ -233,6 +246,26 @@ export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
       try {
         await cfg.deliver(chatId, streamed.final_reply)
       } catch { /* swallow */ }
+
+      // W21.7 — re-read this auto/deterministic reply against context
+      // and correct it if it missed intent. Fire-and-forget AFTER the
+      // fast reply so the user is never delayed; the correction (if
+      // any) arrives as a follow-up. The correction is delivered raw —
+      // it does NOT re-enter handle(), so there is no reply loop.
+      if (cfg.reviewIntent) {
+        const replyForReview = streamed.final_reply
+        void (async () => {
+          try {
+            const v = await cfg.reviewIntent!({ chatId, userText: text, autoReply: replyForReview, klass: streamed.class })
+            if (v && v.ok === false && v.correction && v.correction.trim().length > 0) {
+              await cfg.deliver(
+                chatId,
+                `↳ *Re-reading that* — I think you actually meant:\n${v.correction.trim()}`,
+              )
+            }
+          } catch { /* oversight must never surface an error */ }
+        })()
+      }
     }
 
     if (sessionId) {

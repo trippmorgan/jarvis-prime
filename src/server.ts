@@ -5,6 +5,32 @@ import { registerMessageRoute } from "./routes/message.js";
 import { TelegramPoller } from "./telegram/poller.js";
 import { makeReporter, type Reporter } from "./observability/langfuse-reporter.js";
 import { createTelegramOrchestratorHook } from "./orchestrator/telegram-hook.js";
+import { reviewOrchestratorReply, type OversightTurn } from "./orchestrator/intent-oversight.js";
+import { readFileSync } from "node:fs";
+import { resolve as pathResolve } from "node:path";
+
+// W21.7 — pull the last few conversation turns so the intent-oversight
+// judge can read terse messages ("Update", "Publish") in context.
+function recentConversationTurns(limit = 6): OversightTurn[] {
+  try {
+    const p = pathResolve(process.cwd(), ".data/conversation-history.jsonl");
+    const lines = readFileSync(p, "utf8").trim().split("\n");
+    const turns: OversightTurn[] = [];
+    for (const ln of lines.slice(-limit)) {
+      try {
+        const o = JSON.parse(ln) as { role?: string; content?: string };
+        if ((o.role === "user" || o.role === "assistant") && o.content) {
+          turns.push({ role: o.role, content: o.content });
+        }
+      } catch {
+        /* skip unparseable line */
+      }
+    }
+    return turns;
+  } catch {
+    return [];
+  }
+}
 
 export interface ServerContext {
   server: FastifyInstance
@@ -41,9 +67,22 @@ export async function buildServer(config: Config): Promise<ServerContext> {
     onChat: (chatId, text, userId) => {
       processor.submit(chatId, text, userId)
     },
+    // W21.7 — re-read auto/deterministic replies against context.
+    reviewIntent: async ({ userText, autoReply, klass }) => {
+      try {
+        return await reviewOrchestratorReply({
+          userText,
+          autoReply,
+          klass,
+          recentTurns: recentConversationTurns(),
+        })
+      } catch {
+        return { ok: true }
+      }
+    },
   })
 
-  const poller = config.TELEGRAM_BOT_TOKEN
+  const poller = (!config.JARVIS_TELEGRAM_DISABLED && config.TELEGRAM_BOT_TOKEN)
     ? new TelegramPoller({
         botToken: config.TELEGRAM_BOT_TOKEN,
         allowedChatIds: [config.TRIPP_CHAT_ID],
