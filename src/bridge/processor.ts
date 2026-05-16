@@ -1260,11 +1260,23 @@ export class MessageProcessor {
       return output
     } catch (err) {
       clearTimeout(ackTimer)
-      const errorMsg = this.formatDualBrainError(err, msg.id)
-      const typed =
+      // Resilience: a hemisphere that fails to *spawn/execute* (e.g. a retired
+      // model id → CLI exit 1) must not black-hole the user's message. Degrade
+      // to single-brain so they still get a real answer. Scoped to hemisphere
+      // exec failures only — integration-stage and timeout errors keep the
+      // explicit error so we don't silently double latency or mask a merge bug.
+      if (
         err instanceof LeftHemisphereError ||
-        err instanceof RightHemisphereError ||
-        err instanceof IntegrationError
+        err instanceof RightHemisphereError
+      ) {
+        this.log.warn(
+          { event: 'dual_brain_fallback_single', messageId: msg.id, reason: this.formatDualBrainError(err, msg.id) },
+          'dual-brain hemisphere failed — falling back to single-brain',
+        )
+        return this.processSingleBrain(msg, processStart, this.resolveSingleBrainKind('natural'))
+      }
+      const errorMsg = this.formatDualBrainError(err, msg.id)
+      const typed = err instanceof IntegrationError
       if (typed) {
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error').catch(() => {})
       } else {
@@ -1445,6 +1457,25 @@ export class MessageProcessor {
       return output
     } catch (err) {
       const errorMsg = this.formatDualBrainError(err, msg.id)
+      // Resilience: a hemisphere exec failure before any deliberation card was
+      // pinned (the classic dead-hemisphere-at-spawn case) degrades to
+      // single-brain instead of surfacing an error. If a card is already
+      // pinned, pass-2 succeeded and a fresh solo run would be confusing —
+      // keep the explicit error there.
+      if (
+        !cardPosted &&
+        (err instanceof LeftHemisphereError || err instanceof RightHemisphereError)
+      ) {
+        this.log.warn(
+          { event: 'dual_brain_fallback_single', messageId: msg.id, reason: errorMsg },
+          'dual-brain hemisphere failed — falling back to single-brain',
+        )
+        await responder
+          .finalize(msg.chatId, ackMessageId, '⚡ Dual-brain unavailable — answering solo.')
+          .catch(() => {})
+        stopTyping()
+        return this.processSingleBrain(msg, processStart, this.resolveSingleBrainKind('natural'))
+      }
       if (cardPosted) {
         await this.deliverNewBubbles(msg.id, msg.chatId, errorMsg).catch(() => {})
       } else {

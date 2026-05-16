@@ -324,13 +324,19 @@ describe('MessageProcessor — dual-brain integration (Wave 4)', () => {
     expect(deliverMock).toHaveBeenCalledWith('123', 'dual-brain answer')
   })
 
-  it('surfaces LeftHemisphereError to Telegram', async () => {
+  // Resilience contract (2026-05-16): a hemisphere that fails to spawn/execute
+  // must NOT black-hole the user's message. It degrades to single-brain so the
+  // user still gets a real answer, and logs `dual_brain_fallback_single`.
+  it('LeftHemisphereError → falls back to single-brain (no black-hole)', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'solo answer', stderr: '', exitCode: 0, durationMs: 50, timedOut: false,
+    })
     const orchestrator = vi.fn().mockRejectedValue(new LeftHemisphereError('spawn failed'))
-    const errorSpy = vi.fn()
+    const warnSpy = vi.fn()
     const fakeLogger = {
       info: vi.fn(),
-      warn: vi.fn(),
-      error: errorSpy,
+      warn: warnSpy,
+      error: vi.fn(),
       fatal: vi.fn(),
       debug: vi.fn(),
       trace: vi.fn(),
@@ -348,19 +354,26 @@ describe('MessageProcessor — dual-brain integration (Wave 4)', () => {
     processor.submit('123', 'natural', 'user1')
     await waitFor(() => deliverMock.mock.calls.length > 0)
 
-    const callText = deliverMock.mock.calls[0][1] as string
-    expect(callText).toContain('Left hemisphere failed')
-    expect(callText).toContain('spawn failed')
-    expect(errorSpy).toHaveBeenCalled()
+    const callText = deliverMock.mock.calls.at(-1)?.[1] as string
+    expect(callText).toContain('solo answer')
+    expect(callText).not.toContain('Left hemisphere failed')
+    expect(spawnClaude).toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'dual_brain_fallback_single' }),
+      expect.any(String),
+    )
   })
 
-  it('surfaces RightHemisphereError to Telegram', async () => {
+  it('RightHemisphereError → falls back to single-brain (no black-hole)', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'solo answer', stderr: '', exitCode: 0, durationMs: 50, timedOut: false,
+    })
     const orchestrator = vi.fn().mockRejectedValue(new RightHemisphereError('gateway down'))
-    const errorSpy = vi.fn()
+    const warnSpy = vi.fn()
     const fakeLogger = {
       info: vi.fn(),
-      warn: vi.fn(),
-      error: errorSpy,
+      warn: warnSpy,
+      error: vi.fn(),
       fatal: vi.fn(),
       debug: vi.fn(),
       trace: vi.fn(),
@@ -378,10 +391,14 @@ describe('MessageProcessor — dual-brain integration (Wave 4)', () => {
     processor.submit('123', 'natural', 'user1')
     await waitFor(() => deliverMock.mock.calls.length > 0)
 
-    const callText = deliverMock.mock.calls[0][1] as string
-    expect(callText).toContain('Right hemisphere failed')
-    expect(callText).toContain('gateway down')
-    expect(errorSpy).toHaveBeenCalled()
+    const callText = deliverMock.mock.calls.at(-1)?.[1] as string
+    expect(callText).toContain('solo answer')
+    expect(callText).not.toContain('Right hemisphere failed')
+    expect(spawnClaude).toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'dual_brain_fallback_single' }),
+      expect.any(String),
+    )
   })
 
   it('surfaces IntegrationError to Telegram', async () => {
@@ -1152,7 +1169,10 @@ describe('MessageProcessor — data-flow logging', () => {
     expect(payload.outcome).toBe('success')
   })
 
-  it('process_end fires with outcome=error when orchestrator throws LeftHemisphereError', async () => {
+  it('LeftHemisphereError degrades to single-brain: process_end path=single_brain outcome=success', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'solo answer', stderr: '', exitCode: 0, durationMs: 50, timedOut: false,
+    })
     const { spy, events } = makeCapturingLogger()
     const orchestrator = vi.fn().mockRejectedValue(new LeftHemisphereError('boom'))
     const { processor, deliverMock } = makeProcessor({
@@ -1167,8 +1187,9 @@ describe('MessageProcessor — data-flow logging', () => {
     const ends = events('process_end')
     expect(ends.length).toBe(1)
     const payload = ends[0].payload as Record<string, unknown>
-    expect(payload.path).toBe('dual_brain')
-    expect(payload.outcome).toBe('error')
+    expect(payload.path).toBe('single_brain')
+    expect(payload.outcome).toBe('success')
+    expect(events('dual_brain_fallback_single').length).toBe(1)
   })
 
   it('PHI-safety: no log payload contains raw user message, finalText, or pass-1/pass-2 draft content', async () => {
@@ -1408,10 +1429,12 @@ describe('MessageProcessor — evolving-message UX (Wave 6)', () => {
     }
   }, 15_000)
 
+  // IntegrationError still surfaces (scoped fallback covers hemisphere exec
+  // failures only) — keeps coverage of the error-finalize + stop-typing path.
   it('error path finalizes with error text and stops typing heartbeat', async () => {
     const { surface, editMessageText, sendChatAction } = makeFakeSurface()
 
-    const orchestrator = vi.fn().mockRejectedValue(new LeftHemisphereError('boom'))
+    const orchestrator = vi.fn().mockRejectedValue(new IntegrationError('boom'))
 
     const { processor } = makeProcessor({
       corpusCallosumEnabled: true,
@@ -1426,7 +1449,7 @@ describe('MessageProcessor — evolving-message UX (Wave 6)', () => {
     await waitFor(() => editMessageText.mock.calls.length >= 1, 3000)
 
     const lastEditText = editMessageText.mock.calls.at(-1)?.[2] as string
-    expect(lastEditText).toContain('Left hemisphere failed')
+    expect(lastEditText).toContain('Integration failed after retry')
     expect(lastEditText).toContain('boom')
 
     // Snapshot typing call count right after resolution, then wait 5s real —
@@ -1434,6 +1457,40 @@ describe('MessageProcessor — evolving-message UX (Wave 6)', () => {
     const afterErrorCount = sendChatAction.mock.calls.length
     await new Promise((r) => setTimeout(r, 5000))
     expect(sendChatAction.mock.calls.length).toBe(afterErrorCount)
+  }, 10_000)
+
+  it('evolving path: LeftHemisphereError degrades to single-brain instead of black-holing', async () => {
+    vi.mocked(spawnClaude).mockResolvedValue({
+      output: 'solo answer', stderr: '', exitCode: 0, durationMs: 50, timedOut: false,
+    })
+    const { surface, sendMessageAndGetId, editMessageText } = makeFakeSurface()
+    const orchestrator = vi.fn().mockRejectedValue(new LeftHemisphereError('exit code 1'))
+
+    const { processor } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      evolvingMessageEnabled: true,
+      telegramSurface: surface,
+    })
+
+    processor.submit('chat-G', 'natural', 'user1')
+
+    // Evolving single-brain delivers through the Telegram surface (edit or
+    // fresh bubble), not deliverMock. Wait for the solo answer to land there.
+    await waitFor(() => {
+      const edits = editMessageText.mock.calls.map((c) => String(c[2])).join('\n')
+      const bubbles = sendMessageAndGetId.mock.calls.map((c) => String(c[1])).join('\n')
+      return (edits + '\n' + bubbles).includes('solo answer')
+    }, 5000)
+
+    const allSurfaceText = [
+      ...editMessageText.mock.calls.map((c) => String(c[2])),
+      ...sendMessageAndGetId.mock.calls.map((c) => String(c[1])),
+    ].join('\n')
+    // The dead hemisphere did NOT eat the message; no raw error surfaced.
+    expect(allSurfaceText).toContain('solo answer')
+    expect(allSurfaceText).not.toContain('Left hemisphere failed')
+    expect(spawnClaude).toHaveBeenCalled()
   }, 10_000)
 
   it('clinical bypass routes to single-brain with only one final edit', async () => {
