@@ -48,6 +48,31 @@ const RULES: ClassRule[] = [
   // the athena-nav plan from QUERY_PLANS.
   { pattern: /\b(?:open|go\s+to|navigate\s+to|take\s+me\s+to|pull\s+up|bring\s+up|switch\s+to|jump\s+to)\s+(?:the\s+)?(?:athena\s+)?(?:calendar|appointment\s+book|today'?s\s+(?:appointments|schedule)|schedule(?:\s+screen)?|dashboard|athena\s+home|home\s+page)\b/i, klass: 'query' },
 
+  // AVSO v2 — PATIENT NAVIGATION (blind typist into Athena
+  // input#searchinput). Placed AFTER the v1 nav rule so v1 nav targets
+  // ("pull up the calendar / appointment book / today's schedule") stay
+  // the v1 nav plan; this rule needs a PATIENT signal — "chart for X",
+  // "(pull up|open) patient X", or "search for patient X in athena". The
+  // patient string is PHI; classify carries NOTHING but the class — the
+  // redaction happens in plan.ts (placeholder + corr-id). Decoys ("pull
+  // up the weather / news / that song") lack chart/patient → stay chat.
+  // klass=query so plan.ts builds the athena-patient-search step.
+  { pattern: /\b(?:open|pull\s+up|bring\s+up|find|look\s+up)\s+(?:the\s+)?(?:patient\s+)?chart\s+(?:for|of)\s+\S/i, klass: 'query' },
+  { pattern: /\b(?:open|pull\s+up|bring\s+up|find|look\s+up)\s+(?:the\s+)?patient\s+\S/i, klass: 'query' },
+  { pattern: /\bsearch\s+(?:for\s+)?(?:the\s+)?patient\s+.+?\b(?:in|on|via)\s+athena\b|\bsearch\s+athena\s+(?:for\s+)?(?:the\s+)?patient\s+\S/i, klass: 'query' },
+
+  // AVSO v2 — FREE-TEXT INPUT write ("type/dictate/enter/write '<x>'
+  // into|in <field>"). Requires a write verb + an explicit destination
+  // ("into"/"in"/"to") so plain "type faster" / "what should I dictate"
+  // stay chat. klass=workflow so plan.ts builds the two-phase
+  // prepare(T1)→commit(T3) plan (or v2b-deferred / clarify). The
+  // dictated text is PHI — classify carries only the class; redaction is
+  // plan.ts's job (placeholder + corr-id).
+  { pattern: /\b(?:type|dictate|enter|write|put|insert|add|append)\b[^.\n]*?\b(?:in|into|onto|on)\s+(?:the\s+)?(?:\w+[-\s]?)*\b(?:field|box|note|hpi|history|assessment|plan|complaint|impression|comment|free[-\s]?text|chief\s+complaint|problem\s+list|medication|meds?|order|orders?|diagnos[ei]s|dx|icd|disposition|allerg(?:y|ies))\b/i, klass: 'workflow' },
+  { pattern: /\b(?:type|dictate|enter|write|insert|append)\s+["'].+?["']/i, klass: 'workflow' },
+  { pattern: /\b(?:add|append|put)\s+["'].+?["']\s+(?:in|into|onto|to|on)\b/i, klass: 'workflow' },
+  { pattern: /\bset\s+(?:the\s+)?(?:\w+[-\s]?)*\b(?:hpi|history|assessment|plan|note|impression|comment|disposition|problem\s+list|medication|meds?|order|orders?|diagnos[ei]s|dx|icd|allerg(?:y|ies))\b\s+to\b/i, klass: 'workflow' },
+
   // Clinical query (PHI path; PHI redactor must fire)
   // W21.10 — clinical / Athena. "use the athena skill" and "check my
   // schedule for Monday" were falling to chat (no live Athena there) →

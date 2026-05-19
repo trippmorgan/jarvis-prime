@@ -29,6 +29,13 @@ const baseSchema = z.object({
   OPENCLAW_GATEWAY_URL: z.string().default("http://127.0.0.1:18789"),
   OPENCLAW_GATEWAY_TOKEN: z.string().default(""),
   TELEGRAM_BOT_TOKEN: z.string().default(""),
+  // HTTP-only mode killswitch. When true, the Telegram poller is NOT
+  // constructed even if TELEGRAM_BOT_TOKEN is set — the brain runs as a
+  // pure HTTP / Jarvis-OS orchestration backend and never races OpenClaw
+  // for the bot. This is the safe steady state while OpenClaw owns
+  // Telegram; flipping it to false (+ restart) is what hands the bot to
+  // Prime, mirroring `jarvis-toggle prime`. Default false (poll if token).
+  JARVIS_TELEGRAM_DISABLED: boolFromEnv(false),
   TRIPP_CHAT_ID: z.string().default("8048875001"),
   WORKSPACE_DIR: z.string().default("/home/tripp/.openclaw/workspace"),
   DELIVERY_QUEUE_DIR: z.string().default("/home/tripp/.openclaw/delivery-queue"),

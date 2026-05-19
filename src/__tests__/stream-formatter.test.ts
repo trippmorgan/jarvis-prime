@@ -78,7 +78,7 @@ describe('formatStreamEvent', () => {
               name: 'Read',
               input: {
                 file_path:
-                  '/home/tripp/Documents/claude-team/clinical-archive/patient42.md',
+                  '/home/tripp/.openclaw/workspace/jarvis-os/clinical-archive/patient42.md',
               },
             },
           ],

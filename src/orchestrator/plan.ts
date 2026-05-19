@@ -8,6 +8,43 @@
 // Future: dynamic plans via Anthropic call. Hard-coded is fine for v1.
 
 import type { IntentClass, Plan, PlanStep } from './types.js'
+import { buildAvsoV2Context, type BuildAvsoV2ContextInput } from './types.js'
+
+// ─── AVSO v2 — free-text field resolution (PLAN-v2 T8 / SPEC AD9) ────────
+//
+// The write target must be a RESOLVED FREE-TEXT field. Structured
+// clinical fields (orders, meds, dx/ICD, disposition, problem list) are
+// DEFERRED to v2b — they never produce a commit. An unresolvable /
+// ambiguous field → clarify, never a guessed write. Pure string match,
+// no PHI: we look only at the field-label tokens, never the dictated
+// text (which is redacted before it ever reaches a plan envelope).
+
+// Structured clinical fields — explicitly deferred to v2b (SPEC §73).
+const STRUCTURED_FIELD_RE =
+  /\b(problem\s+list|medication|meds?|medication\s+order|drug|rx|order|orders|diagnos[ei]s|dx|icd(?:[-\s]?\d+)?(?:\s+code)?|disposition|disp|allerg(?:y|ies))\b/i
+
+// Free-text fields we will type into (the v2 free-text-first surface).
+const FREETEXT_FIELD_RE =
+  /\b(hpi|history\s+of\s+present\s+illness|history|chief\s+complaint|cc|assessment(?:\s+(?:and|&)\s+plan)?|a&p|plan|note|progress\s+note|impression|comment|free[-\s]?text|narrative|subjective|objective|exam|review\s+of\s+systems|ros)\b/i
+
+type FieldResolution =
+  | { kind: 'freetext'; fieldId: string }
+  | { kind: 'structured'; fieldId: string }
+  | { kind: 'ambiguous' }
+
+function resolveWriteField(text: string): FieldResolution {
+  // Structured wins first — a structured label must NEVER be treated as
+  // free-text (it would route a deferred field into a real write).
+  const structured = text.match(STRUCTURED_FIELD_RE)
+  if (structured) {
+    return { kind: 'structured', fieldId: structured[1].toLowerCase().replace(/\s+/g, '_') }
+  }
+  const freetext = text.match(FREETEXT_FIELD_RE)
+  if (freetext) {
+    return { kind: 'freetext', fieldId: freetext[1].toLowerCase().replace(/\s+/g, '_') }
+  }
+  return { kind: 'ambiguous' }
+}
 
 interface PatternToPlan {
   pattern: RegExp
@@ -74,21 +111,75 @@ const QUERY_PLANS: PatternToPlan[] = [
     },
   },
 
+  // AVSO v2 — PATIENT NAVIGATION (blind typist). MUST precede the
+  // clinical/export plan: a "pull up the chart for <name>" is a blind
+  // search submit, NOT a redacted schedule pull. Single scalpel
+  // athena-patient-search step, tier-1, NO confirm gate. The raw patient
+  // string is REDACTED here by buildAvsoV2PlanStep (placeholder +
+  // corr-id) — it never enters the plan envelope. Mirrors the
+  // classify.ts v2 patient rules.
+  {
+    pattern: /\b(?:open|pull\s+up|bring\s+up|find|look\s+up)\s+(?:the\s+)?(?:patient\s+)?chart\s+(?:for|of)\s+\S|\b(?:open|pull\s+up|bring\s+up|find|look\s+up)\s+(?:the\s+)?patient\s+\S|\bsearch\s+(?:for\s+)?(?:the\s+)?patient\s+.+?\b(?:in|on|via)\s+athena\b|\bsearch\s+athena\s+(?:for\s+)?(?:the\s+)?patient\s+\S/i,
+    build: (m) => {
+      // The raw spoken patient string is PHI. We pass its presence (not
+      // its value) so buildAvsoV2Context flips on the <PATIENT_QUERY>
+      // placeholder; the value is dropped on the floor here.
+      const step = buildAvsoV2PlanStep({
+        kind: 'athena-patient-search',
+        rawPatientQuery: m.input ?? '',
+      })
+      return {
+        class: 'query',
+        summary:
+          'Blind patient search on Scalpel (Athena GlobalNav). Prime types + submits; ' +
+          'the match list renders on your screen — pick there. Reply is non-PHI.',
+        steps: [step],
+      }
+    },
+  },
+
   {
     pattern: /\bmy\s+(?:or\s+|surgery\s+|clinic\s+|case\s+)?schedule\b|\bschedule\s+(?:for\s+)?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})\b|\bathena\b[^.\n]{0,24}\b(?:schedul\w*|patient|cases?|emr|clinic|appointment|skill|request|pull)\b|\b(?:schedul\w*|patient|cases?|emr|clinic|appointment)\b[^.\n]{0,24}\bathena\b|\b(?:patient\s+schedule|morning\s+report|surgery\s+list|or\s+schedule|today'?s\s+cases|tomorrow'?s\s+cases)\b/i,
     build: (m) => {
       const date = resolveScheduleDate(m.input ?? '')
+      const schedStep: PlanStep = {
+        target: 'scalpel',
+        command_type: 'patient-schedule',
+        args: { date },
+        description: `Fetch the ${date} OR schedule (redacted summary; full PHI stays in clinical-archive)`,
+      }
+      // AVSO v2 — NON-TODAY date-NAV goes through a PHI-safe runtime UI
+      // probe FIRST (SPEC AD10/AC12): the probe classifies legacy
+      // Calendar vs Appointment-Schedule (nav-chrome only, tier-0, no
+      // PHI) so the export targets the right UI variant — never a
+      // guessed nav. Scope is the v2 *date-nav* surface: a non-today
+      // date with NO possessive v1-export signal. v1's possessive
+      // clinical export ("(check) my … schedule for Monday", "my OR
+      // schedule tomorrow") keeps its v1 single-step shape — that
+      // contract (W21.10) is v1 and MUST NOT regress; the probe-first
+      // ordering belongs to the new v2 date-nav phrasing. TODAY is
+      // always the single-step export (no probe). The probe step still
+      // carries `date` in args so callers reading steps[0].args.date
+      // get the resolved date regardless of which branch fired.
+      const isV1PossessiveExport = /\bmy\s+(?:or\s+|surgery\s+|clinic\s+|case\s+)?schedule\b/i.test(
+        m.input ?? '',
+      )
+      if (date !== 'today' && !isV1PossessiveExport) {
+        const probe = buildAvsoV2PlanStep({
+          kind: 'athena-schedule-date-probe',
+          date,
+        })
+        probe.description = `Probe the live Athena schedule UI (legacy vs Appointment-Schedule) for ${date} — nav-chrome only, no PHI`
+        return {
+          class: 'query',
+          summary: `Probing the Athena schedule UI then pulling the redacted ${date} schedule from Scalpel.`,
+          steps: [probe, schedStep],
+        }
+      }
       return {
         class: 'query',
-        summary: `Pulling the redacted ${date === 'today' ? 'OR' : date} schedule from Scalpel (Athena).`,
-        steps: [
-          {
-            target: 'scalpel',
-            command_type: 'patient-schedule',
-            args: { date },
-            description: `Fetch the ${date} OR schedule (redacted summary; full PHI stays in clinical-archive)`,
-          },
-        ],
+        summary: 'Pulling the redacted OR schedule from Scalpel (Athena).',
+        steps: [schedStep],
       }
     },
   },
@@ -220,6 +311,68 @@ function buildXPostPlan(rawTopic: string | undefined): Plan {
 // ─── Workflow plans ─────────────────────────────────────────────────────
 
 const WORKFLOW_PLANS: PatternToPlan[] = [
+  // AVSO v2 — FREE-TEXT INPUT write. Placed FIRST so a "type '<x>' into
+  // the HPI" can't be hijacked by the X-post / morning-show rules. The
+  // dictated text is PHI: buildAvsoV2PlanStep redacts it to <WRITE_TEXT>
+  // (it never enters the plan envelope). Routing:
+  //   • free-text field  → TWO-PHASE: prepare(T1) → commit(T3). The
+  //     commit REUSES the prepare correlation id so T2's ledger can
+  //     link the eventual Telegram affirmative back to THIS staged
+  //     write; commit is tier-3 so execute.ts mints
+  //     `CONFIRM ATHENA-INPUT-COMMIT` via the existing W21 gate.
+  //   • structured clinical field → v2b-deferred, NO commit (SPEC §73).
+  //   • unresolvable field → clarify, never a guessed write.
+  {
+    pattern: /\b(?:type|dictate|enter|write|insert|append)\s+["'].+?["']|\b(?:type|dictate|enter|write|put|insert|add|append)\b[^.\n]*?\b(?:in|into|onto|on)\s+(?:the\s+)?(?:\w+[-\s]?)*\b(?:field|box|note|hpi|history|assessment|plan|complaint|impression|comment|free[-\s]?text|chief\s+complaint|problem\s+list|medication|meds?|order|orders?|diagnos[ei]s|dx|icd|disposition|allerg(?:y|ies))\b|\bset\s+(?:the\s+)?(?:\w+[-\s]?)*\b(?:hpi|history|assessment|plan|note|impression|comment|disposition|problem\s+list|medication|meds?|order|orders?|diagnos[ei]s|dx|icd|allerg(?:y|ies))\b\s+to\b|\b(?:add|append|put)\s+["'].+?["']\s+(?:in|into|onto|to|on)\b/i,
+    build: (m) => {
+      const text = m.input ?? ''
+      const field = resolveWriteField(text)
+
+      if (field.kind === 'ambiguous') {
+        return {
+          class: 'workflow',
+          summary:
+            'Which field should this go into? I won\'t guess a clinical write — ' +
+            'name the free-text field (e.g. HPI, assessment, plan) and I\'ll stage it.',
+          steps: [],
+        }
+      }
+
+      if (field.kind === 'structured') {
+        return {
+          class: 'workflow',
+          summary:
+            `Structured clinical field ("${field.fieldId}") write is deferred to v2b — ` +
+            'free-text fields only in v2. No write staged.',
+          steps: [],
+        }
+      }
+
+      // Free-text → two-phase prepare(T1) → commit(T3), correlated.
+      const prepare = buildAvsoV2PlanStep({
+        kind: 'athena-input-prepare',
+        rawWriteText: text,
+        fieldId: field.fieldId,
+      })
+      // The commit MUST reuse the prepare's correlation id so T2's
+      // pending-write ledger links the affirmative to THIS staged write.
+      const corr = String(prepare.args.correlation_id)
+      const commit = buildAvsoV2PlanStep({
+        kind: 'athena-input-commit',
+        rawWriteText: text,
+        fieldId: field.fieldId,
+        correlationId: corr,
+      })
+      return {
+        class: 'workflow',
+        summary:
+          `Staging a free-text write into "${field.fieldId}" on Scalpel (Athena), ` +
+          'then pausing for your typed Telegram confirmation before it types + submits.',
+        steps: [prepare, commit],
+      }
+    },
+  },
+
   // Social posting for WPFQ. Target Prime first so the handler can read the
   // PretoriaFields workspace docs (PLAYBOOK + social strategy) before it
   // talks to station systems or any external API. `social-post` is tier 3,
@@ -568,6 +721,25 @@ export function buildPlan(text: string, klass: IntentClass): Plan {
     class: klass,
     summary: 'I understood the intent but don\'t have a concrete plan template for this yet.',
     steps: [],
+  }
+}
+
+// ─── AVSO v2 — Wave 1 / T1: redacted PlanStep envelope shape ─────────────
+//
+// CONTRACT ONLY. This builder takes raw (PHI) inputs and returns a
+// scalpel-targeted PlanStep whose args are the redacted v2 context
+// (placeholder + correlation id + risk tier). It does NOT classify or
+// route — wiring "which message → which v2 kind" is a later wave (T8).
+// The point of having it here now is that the envelope-construction
+// shape lives next to the rest of plan.ts and is provably PHI-safe.
+export function buildAvsoV2PlanStep(input: BuildAvsoV2ContextInput): PlanStep {
+  const ctx = buildAvsoV2Context(input)
+  return {
+    target: 'scalpel',
+    command_type: ctx.kind,
+    // args carry ONLY the redacted context — no raw text crosses here.
+    args: { ...ctx },
+    description: `AVSO v2 ${ctx.kind} on Scalpel (redacted; corr ${ctx.correlation_id}, tier ${ctx.risk_tier})`,
   }
 }
 

@@ -70,6 +70,8 @@ try {
       server.log.error({ error: err instanceof Error ? err.message : String(err) }, 'Telegram poller crashed');
     });
     server.log.info(`Telegram poller started — listening for messages from @${config.TELEGRAM_BOT_USERNAME}`);
+  } else if (config.JARVIS_TELEGRAM_DISABLED) {
+    server.log.warn('JARVIS_TELEGRAM_DISABLED=true — HTTP-only mode (token present but poller suppressed; OpenClaw owns the bot)');
   } else {
     server.log.warn('No TELEGRAM_BOT_TOKEN — running in HTTP-only mode (no Telegram polling)');
   }

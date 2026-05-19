@@ -21,6 +21,13 @@ export interface SpawnOptions {
   enableSlashCommands?: boolean;
 }
 
+export interface SpawnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+}
+
 export interface SpawnResult {
   /** Captured stdout from the claude process */
   output: string;
@@ -32,4 +39,10 @@ export interface SpawnResult {
   durationMs: number;
   /** True if the process was killed due to timeout */
   timedOut: boolean;
+  /** Token usage from the CLI's final `result` event, when present. */
+  usage?: SpawnUsage;
+  /** Total cost in USD as reported by the CLI (covers cache + standard pricing). */
+  costUsd?: number;
+  /** Canonical model name resolved by the CLI (e.g. "claude-sonnet-4-6"). */
+  modelResolved?: string;
 }

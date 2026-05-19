@@ -31,6 +31,12 @@ export class TelegramPoller {
   private running = false
   private abortController: AbortController | null = null
 
+  // Circuit breaker: collapse repeated transport failures into one event
+  private consecutiveTransportFailures = 0
+  private circuitOpen = false
+  private static readonly BREAKER_TRIP_THRESHOLD = 3
+  private static readonly BREAKER_MAX_BACKOFF_MS = 60_000
+
   constructor(config: TelegramPollerConfig) {
     this.apiBase = `https://api.telegram.org/bot${config.botToken}`
     this.allowedChatIds = new Set(config.allowedChatIds)
@@ -54,8 +60,11 @@ export class TelegramPoller {
           this.log.warn('Telegram poll conflict (409) — another process is polling this token. Yielding 90s.')
           await sleep(90_000)
         } else {
-          this.log.error({ error: msg }, 'Telegram poll error — retrying in 5s')
-          await sleep(5_000)
+          const backoff = this.pollBackoffMs
+          if (!this.circuitOpen) {
+            this.log.error({ error: msg }, `Telegram poll error — retrying in ${backoff / 1000}s`)
+          }
+          await sleep(backoff)
         }
       }
     }
@@ -75,6 +84,11 @@ export class TelegramPoller {
    * are returned to the caller so existing per-method handling can apply
    * (markdown reparse, benign 400s, etc.). Returns null only when both
    * attempts threw.
+   *
+   * Circuit breaker: after BREAKER_TRIP_THRESHOLD consecutive transport
+   * failures, enters open state — suppresses per-request error logs and
+   * emits a single "transport down" event. On recovery, emits "transport
+   * recovered" and resets.
    */
   private async fetchTelegram(path: string, body: object, ctx: object): Promise<Response | null> {
     const url = `${this.apiBase}/${path}`
@@ -85,19 +99,46 @@ export class TelegramPoller {
     }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        return await fetch(url, init)
+        const res = await fetch(url, init)
+        // Success (HTTP-level) — reset circuit breaker
+        if (this.circuitOpen) {
+          this.log.info('Telegram transport recovered — circuit breaker closed')
+          this.circuitOpen = false
+        }
+        this.consecutiveTransportFailures = 0
+        return res
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         if (attempt === 0) {
-          this.log.warn({ ...ctx, path, error: errMsg }, 'Telegram fetch failed — retrying once after 200ms')
+          if (!this.circuitOpen) {
+            this.log.warn({ ...ctx, path, error: errMsg }, 'Telegram fetch failed — retrying once after 200ms')
+          }
           await sleep(200)
           continue
         }
-        this.log.error({ ...ctx, path, error: errMsg }, 'Telegram fetch failed after retry')
+        // Both attempts failed — increment circuit breaker
+        this.consecutiveTransportFailures++
+        if (!this.circuitOpen && this.consecutiveTransportFailures >= TelegramPoller.BREAKER_TRIP_THRESHOLD) {
+          this.circuitOpen = true
+          this.log.error(
+            { consecutiveFailures: this.consecutiveTransportFailures, lastError: errMsg },
+            'Telegram transport DOWN — circuit breaker open. Suppressing per-request errors until recovery.',
+          )
+        } else if (!this.circuitOpen) {
+          this.log.error({ ...ctx, path, error: errMsg }, 'Telegram fetch failed after retry')
+        }
+        // When circuit is open, suppress individual error logs (already reported the state change)
         return null
       }
     }
     return null
+  }
+
+  /** Backoff duration for the poll loop when circuit breaker is open. */
+  private get pollBackoffMs(): number {
+    if (!this.circuitOpen) return 5_000
+    // Exponential backoff: 5s, 10s, 20s, 40s, capped at 60s
+    return Math.min(5_000 * Math.pow(2, this.consecutiveTransportFailures - TelegramPoller.BREAKER_TRIP_THRESHOLD), TelegramPoller.BREAKER_MAX_BACKOFF_MS)
   }
 
   async sendMessage(chatId: string, text: string, parseMode?: string): Promise<boolean> {

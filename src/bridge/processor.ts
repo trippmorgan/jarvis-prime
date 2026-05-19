@@ -57,9 +57,19 @@ import {
 } from '../lieutenant/kernel-events.js'
 
 const ACK_DELAY_MS = 8_000
-const HARD_TIMEOUT_MS = 600_000
+const HARD_TIMEOUT_MS = 900_000
 const TELEGRAM_MAX_LENGTH = 4096
 const HISTORY_RELATIVE_PATH = '.data/conversation-history.jsonl'
+
+const RATE_LIMIT_PATTERN = /You[''’]ve hit your limit/i
+
+function isRateLimitOutput(result: SpawnResult): boolean {
+  if (result.exitCode === 0) return false
+  return (
+    RATE_LIMIT_PATTERN.test(result.output) ||
+    RATE_LIMIT_PATTERN.test(result.stderr)
+  )
+}
 
 /**
  * Build the langfuse-shaped usage/cost/model overrides from a SpawnResult.
@@ -840,9 +850,21 @@ export class MessageProcessor {
       clearTimeout(ackTimer)
 
       if (result.timedOut) {
-        const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
+        const partial = result.output.trim()
+        const errorMsg = partial
+          ? `${partial}\n\n⏱ Hit the ${Math.round(Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS) / 60_000)}m timeout — partial output above. Pick up where I left off by asking me to continue.`
+          : 'Request timed out with no output. Try breaking the task into smaller steps.'
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
+        if (partial) this.history.append('assistant', partial)
         this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'legacy', errorMsg)
+        return errorMsg
+      }
+
+      if (isRateLimitOutput(result)) {
+        const errorMsg = "I'm rate-limited on the Anthropic Max plan — capacity resets around midnight ET. Try again in a bit."
+        this.log.warn({ exitCode: result.exitCode, event: 'rate_limit_detected' }, 'Claude CLI rate-limited')
+        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'rate_limited', 'legacy', errorMsg)
         return errorMsg
       }
 
@@ -990,9 +1012,21 @@ export class MessageProcessor {
       )
 
       if (result.timedOut) {
-        const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
+        const partial = result.output.trim()
+        const errorMsg = partial
+          ? `${partial}\n\n⏱ Hit the ${Math.round(Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS) / 60_000)}m timeout — partial output above. Pick up where I left off by asking me to continue.`
+          : 'Request timed out with no output. Try breaking the task into smaller steps.'
         await responder.finalize(msg.chatId, ackMessageId, errorMsg)
+        if (partial) this.history.append('assistant', partial)
         this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'evolving', errorMsg)
+        return errorMsg
+      }
+
+      if (isRateLimitOutput(result)) {
+        const errorMsg = "I'm rate-limited on the Anthropic Max plan — capacity resets around midnight ET. Try again in a bit."
+        this.log.warn({ exitCode: result.exitCode, event: 'rate_limit_detected' }, 'Claude CLI rate-limited')
+        await responder.finalize(msg.chatId, ackMessageId, errorMsg)
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'rate_limited', 'evolving', errorMsg)
         return errorMsg
       }
 
@@ -1600,7 +1634,7 @@ export class MessageProcessor {
     messageId: string,
     processStart: number,
     path: 'single_brain' | 'dual_brain',
-    outcome: 'success' | 'error' | 'timeout',
+    outcome: 'success' | 'error' | 'timeout' | 'rate_limited',
     uxPath: 'evolving' | 'legacy',
     output?: string,
   ): void {

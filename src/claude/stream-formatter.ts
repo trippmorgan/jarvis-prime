@@ -25,7 +25,7 @@ const TOOL_EMOJIS: Readonly<Record<string, string>> = {
 }
 
 const MAX_INPUT_CHARS = 80
-const CLINICAL_ROOT = '/home/tripp/Documents/claude-team/clinical-archive'
+const CLINICAL_ROOT = '/home/tripp/.openclaw/workspace/jarvis-os/clinical-archive'
 
 /** Minimal subset of the stream-json event shape we read from. */
 export interface StreamEvent {

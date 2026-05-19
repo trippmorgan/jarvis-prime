@@ -273,7 +273,15 @@ describe('tier: safety classification', () => {
     // click-only navigation with NO field-write capability — proven by
     // athena-nav-selftest.js (static + about:blank integration) and the
     // cmd_athena_nav whitelist. It cannot mutate EMR state.
-    const readOnlyPrefixes = ['health', 'fetch', 'station-query', 'patient', 'athena-nav', 'inspect', 'chrome-cdp-status', 'list-', 'read-']
+    //
+    // 'athena-schedule-date-probe' (AVSO v2, PLAN-v2 T8) is tier-0 and
+    // read-only by the same construction: a nav-chrome-only UI
+    // classification probe (legacy Calendar vs Appointment-Schedule).
+    // It reads chrome markers ONLY — no patient grid/data selectors, no
+    // field-write capability, no PHI (SPEC AD10/AD12, T6 driver +
+    // synthetic-DOM selftest). It cannot mutate EMR state, so it is in
+    // the same read-only family as athena-nav.
+    const readOnlyPrefixes = ['health', 'fetch', 'station-query', 'patient', 'athena-nav', 'athena-schedule-date-probe', 'inspect', 'chrome-cdp-status', 'list-', 'read-']
     for (const cmd of tier0Commands) {
       const isSafe = readOnlyPrefixes.some((p) => cmd.startsWith(p))
       expect(isSafe).toBe(true)

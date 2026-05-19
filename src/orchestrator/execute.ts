@@ -12,6 +12,187 @@
 // progress back to Tripp's thread.
 
 import type { ExecEvent, Plan, PlanStep } from './types.js'
+import { AVSO_V2_KINDS } from './types.js'
+
+// ─── Φ-PHI-Flow T6 / Insertion B1 — Prime-side pre-dispatch verify ───────
+//
+// Backbone: phi-flow/.planning/PLAN.md (T6) + research/03 §2 (Insertion
+// B1). This is an ADDITIVE guard mirroring the existing early-return
+// idioms (the `!emit` branch here, `_avso_v2_scalpel_guard` /
+// `no-confirm-token` on the Scalpel side). It changes nothing for
+// non-PHI kinds.
+//
+// For the PHI-bearing kind set ONLY — the four AVSO v2 kinds plus
+// 'athena-nav' and 'patient-schedule' — emitCommand() consults the T5
+// broker (verifyDeviceRequest) immediately BEFORE the kernel emit:
+//   • deny / missing-envelope → DO NOT emit; the executor reuses the
+//     EXISTING step_failed path with reason:'phi-gate-deny:<code>'
+//     (fail-closed by reuse → summarizeOrchFailures already turns that
+//     into an honest, non-PHI message + the W21.15 fallback engages).
+//   • allow → emit exactly as today.
+//
+// Wave 3a / G1b — the broker is a LOCALHOST SERVICE on SuperServer
+// (Tripp's decision). The default broker is now a localhost HTTP client
+// to the G1a server (sibling, concurrent) at 127.0.0.1:${PHI_GATE_PORT}.
+// T6's guard/emit/tier/poll logic is UNCHANGED — only the absent-module
+// lazy stub is replaced with a real default client. Any unreachable /
+// non-200 / timeout / malformed broker response FAILS CLOSED (deny), so
+// a PHI request can never emit unverified — even if G1a is not yet up.
+// Tests inject a MOCK matching the FROZEN surface via
+// __setPhiGateBrokerForTest, or exercise this real client against a
+// throwaway localhost server.
+
+/** The FROZEN T5 broker surface. The device-signed envelope is opaque to
+ *  B1 (no PHI by T3 schema construction); we only branch on `decision`.
+ *  `attestation` rides through for B2 (Scalpel-side re-verify) — a
+ *  non-PHI signed claim, like corrId; threaded as an OPTIONAL field so
+ *  injected mocks built to the pre-G1b shape still satisfy the type. */
+type PhiGateBroker = (
+  env: unknown,
+  deps?: unknown,
+) =>
+  | { decision: 'allow' | 'deny'; code: string; resourceHash: string; corrId: string; attestation?: string }
+  | Promise<{ decision: 'allow' | 'deny'; code: string; resourceHash: string; corrId: string; attestation?: string }>
+
+/** The PHI-bearing command kinds B1 gates. AVSO non-PHI kinds and every
+ *  other command type are intentionally absent → broker never consulted. */
+const PHI_BEARING_KINDS: ReadonlySet<string> = new Set<string>([
+  ...AVSO_V2_KINDS,
+  'athena-nav',
+  'patient-schedule',
+])
+
+function isPhiBearingKind(commandType: string): boolean {
+  return PHI_BEARING_KINDS.has(commandType)
+}
+
+/** Is B1 enforcement ACTIVE on this box? Rollout contract — the exact
+ *  mirror of the Scalpel-side T7 `_phi_gate_enforced` (see
+ *  jarvis-os/scripts/room-listener/commands.py), same env var name,
+ *  same disarmed-default semantics.
+ *
+ *  B1 (this Prime-side guard) is the component that begins REQUIRING a
+ *  signed device envelope on every PHI-bearing command. Until Φ-PHI-Flow
+ *  is deployed and enrollment is live, no legitimate request carries a
+ *  device envelope — AVSO v2 (already on Scalpel) is driven via Telegram
+ *  WITHOUT one — so blanket-denying here would be a false AVSO
+ *  regression. B1 therefore enforces only when its operator explicitly
+ *  arms it via `PHI_GATE_ENFORCE` (set on Prime at the same time T7 is
+ *  armed on the Scalpel listener). This is a rollout switch, NOT a
+ *  fail-open: once armed, a missing/invalid/forged envelope or an
+ *  unreachable broker is DENIED with no kernel emit. When disarmed the
+ *  box is provably pre-enrollment and the AVSO path is byte-for-byte its
+ *  pre-T6 self — the broker is never consulted, no envelope is required,
+ *  nothing is denied; the guard simply is not in the path yet. Flagged
+ *  for the Wave-gate integration item: Φ-PHI-Flow deploy MUST set this
+ *  on both Prime and the Scalpel listener together. */
+function _phiGateEnforced(): boolean {
+  const v = (process.env.PHI_GATE_ENFORCE ?? '').trim().toLowerCase()
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on'
+}
+
+// ─── G1b — localhost HTTP broker client (the real default broker) ───────
+//
+// FROZEN SERVICE CONTRACT (G1a builds the server to this, verbatim):
+//   POST http://127.0.0.1:${PHI_GATE_PORT}/verify  body {envelope}
+//     → 200 {decision:'allow'|'deny',code,resourceHash,corrId,attestation}
+//   unreachable / non-200 / timeout / malformed
+//     → treat as deny:'broker-unreachable' (FAIL-CLOSED — never allow on
+//        doubt).
+//
+// PHI_GATE_PORT is the single source of truth shared with G1a; the
+// literal default is only the fallback when the env var is unset (G1a
+// uses the SAME default '9787'). The broker is localhost-only by
+// construction (127.0.0.1, never a routable host) — it never leaves
+// SuperServer. Resolved per-request (NOT at module load) so the port is
+// honoured even if it is set after this module is imported.
+const PHI_GATE_PORT_DEFAULT = '9787'
+function phiGateVerifyUrl(): string {
+  const port = process.env.PHI_GATE_PORT ?? PHI_GATE_PORT_DEFAULT
+  return `http://127.0.0.1:${port}/verify`
+}
+const PHI_GATE_TIMEOUT_MS = 4000
+
+/** The fail-closed deny every doubt resolves to. Reusing T6's exact
+ *  return shape so the existing guard path is untouched. */
+function brokerUnreachable(): {
+  decision: 'deny'
+  code: string
+  resourceHash: string
+  corrId: string
+  attestation: string
+} {
+  return { decision: 'deny', code: 'broker-unreachable', resourceHash: '', corrId: '', attestation: '' }
+}
+
+// Localhost HTTP client to the G1a broker service. Never throws — any
+// transport error, non-200, timeout, or malformed body fails CLOSED.
+const httpDefaultBroker: PhiGateBroker = async (env) => {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), PHI_GATE_TIMEOUT_MS)
+  try {
+    const res = await fetch(phiGateVerifyUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ envelope: env }),
+      signal: ac.signal,
+    })
+    if (!res.ok) return brokerUnreachable()
+    let body: unknown
+    try {
+      body = await res.json()
+    } catch {
+      return brokerUnreachable() // malformed / non-JSON → fail closed
+    }
+    const b = body as Record<string, unknown> | null
+    const decision = b?.decision
+    if (decision !== 'allow' && decision !== 'deny') {
+      // Missing/odd decision → cannot trust the verdict → fail closed.
+      return brokerUnreachable()
+    }
+    return {
+      decision,
+      code: typeof b?.code === 'string' ? (b.code as string) : decision === 'allow' ? 'ok' : 'deny',
+      resourceHash: typeof b?.resourceHash === 'string' ? (b.resourceHash as string) : '',
+      corrId: typeof b?.corrId === 'string' ? (b.corrId as string) : '',
+      // attestation rides through for B2 (Scalpel re-verify) — non-PHI,
+      // like corrId. Empty string if the server omitted it.
+      attestation: typeof b?.attestation === 'string' ? (b.attestation as string) : '',
+    }
+  } catch {
+    // ECONNREFUSED / DNS / abort(timeout) / any transport error.
+    return brokerUnreachable()
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+let phiGateBroker: PhiGateBroker = httpDefaultBroker
+
+/** Test seam — inject a mock broker matching the FROZEN T5 surface. */
+export function __setPhiGateBrokerForTest(broker: PhiGateBroker): void {
+  phiGateBroker = broker
+}
+
+/** Test seam — restore the real localhost HTTP fail-closed default broker. */
+export function __resetPhiGateBrokerForTest(): void {
+  phiGateBroker = httpDefaultBroker
+}
+
+/** Deny sentinel returned by emitCommand() when B1 refuses a PHI request.
+ *  The executor translates it into the EXISTING step_failed path. */
+interface PhiGateDeny {
+  __phiGateDeny: true
+  code: string
+}
+
+function isPhiGateDeny(x: unknown): x is PhiGateDeny {
+  return (
+    typeof x === 'object' &&
+    x !== null &&
+    (x as { __phiGateDeny?: unknown }).__phiGateDeny === true
+  )
+}
 
 const KERNEL_URL = process.env.KERNEL_URL ?? 'http://100.80.111.84:3000'
 const KERNEL_TOKEN = process.env.KERNEL_TOKEN ?? ''
@@ -26,6 +207,16 @@ export const COMMAND_TIER: Record<string, number> = {
   'station-query':     0,
   'patient-schedule':  0,
   'athena-nav':        0,   // AVSO v1 — read-only nav, NO confirm gate (AC6)
+  // AVSO v2 (PLAN-v2 T8). Tiers mirror types.ts AVSO_V2_TIER + SPEC L3:
+  //   schedule-date-probe : 0  read-only nav-chrome UI probe (no PHI)
+  //   patient-search      : 1  blind typist into searchinput, NO confirm
+  //   input-prepare       : 1  stages a pending write, no mutation
+  //   input-commit        : 3  the actual write — typed-confirm gate
+  //                            (execute.ts mints CONFIRM ATHENA-INPUT-COMMIT)
+  'athena-schedule-date-probe': 0,
+  'athena-patient-search':      1,
+  'athena-input-prepare':       1,
+  'athena-input-commit':        3,
   'inspect-mcp':       0,
   'chrome-cdp-status': 0,
   'list-experiments':  0,
@@ -50,6 +241,13 @@ const POLL_TIMEOUT_OVERRIDE_MS: Record<string, number> = {
   'ollama-operation': 120_000,
   'patient-schedule': 100_000,   // Athena CDP frameset scrape ~60-80s
   'athena-nav':        60_000,   // AVSO v1 — click-only nav (Pendo + steps), ~10-30s
+  // AVSO v2 — Scalpel CDP frame work (GlobalNav search / free-text field
+  // resolve + type + submit / nav-chrome probe) outlasts the 15s status
+  // budget; give the same headroom family as athena-nav / patient-schedule.
+  'athena-patient-search':       60_000,
+  'athena-input-prepare':        60_000,
+  'athena-input-commit':         90_000,
+  'athena-schedule-date-probe':  60_000,
   'morning-show-build':  120_000, // plan/status mode is fast; headroom if execute=true kicks the pipeline
 }
 
@@ -108,7 +306,47 @@ async function emitCommand(
   step: PlanStep,
   sessionId: string | undefined,
   deadlineSec: number,
-): Promise<EmitResponse | null> {
+): Promise<EmitResponse | PhiGateDeny | null> {
+  // ─── Φ-PHI-Flow B1 — pre-dispatch verify (ADDITIVE, PHI kinds only) ───
+  // Immediately before the kernel emit, exactly per research/03 §2 B1.
+  // Non-PHI kinds skip this entirely (broker never consulted). The
+  // device-signed envelope rides in the redacted ctx as a non-PHI field
+  // (step.args.phi_envelope) — like correlation_id; it carries no raw PHI
+  // by T3 schema construction. Missing envelope on a PHI kind, or any
+  // broker deny, fails CLOSED via the existing step_failed path.
+  //
+  // ROLLOUT SWITCH (mirrors Scalpel T7 `_phi_gate_enforced`): the entire
+  // B1 block below is active ONLY when `PHI_GATE_ENFORCE` is armed.
+  // Disarmed (default / unset / not 1|true|yes|on) → this branch is NOT
+  // entered: no envelope is required, the broker is never consulted,
+  // nothing is denied. PHI-bearing kinds emit byte-for-byte exactly as
+  // pre-T6 (AVSO v2 keeps working through Telegram unchanged). This is a
+  // rollout switch, NOT a fail-open — see _phiGateEnforced. T6's
+  // guard/emit/deny internals below are UNCHANGED; only its ACTIVATION
+  // is wrapped.
+  if (_phiGateEnforced() && isPhiBearingKind(step.command_type)) {
+    const env = (step.args as Record<string, unknown> | undefined)?.phi_envelope
+    if (env === undefined || env === null) {
+      // Fail closed WITHOUT trusting the broker — no envelope, no emit.
+      return { __phiGateDeny: true, code: 'no-envelope' }
+    }
+    let decision: 'allow' | 'deny'
+    let code: string
+    try {
+      const verdict = await phiGateBroker(env, { kind: step.command_type })
+      decision = verdict.decision
+      code = verdict.code
+    } catch {
+      // A throwing broker is a deny (fail-closed by construction).
+      decision = 'deny'
+      code = 'broker-error'
+    }
+    if (decision !== 'allow') {
+      return { __phiGateDeny: true, code: code || 'deny' }
+    }
+    // allow → fall through and emit exactly as today.
+  }
+
   const deadline = new Date(Date.now() + deadlineSec * 1000).toISOString()
   const tier = tierFor(step.command_type)
   // W21.1 — the kernel stores `input.required_phrase ?? null` and never
@@ -201,6 +439,14 @@ export async function* executePlan(
   for (const step of plan.steps) {
     stepNumber += 1
     const emit = await emitCommand(step, sessionId, DEFAULT_DEADLINE_SEC)
+    if (isPhiGateDeny(emit)) {
+      // Φ-PHI-Flow B1 — fail-closed by REUSING the existing step_failed
+      // path. summarizeOrchFailures() turns this into an honest, non-PHI
+      // message; the W21.15 conversational fallback then engages.
+      yield { kind: 'step_failed', step, step_number: stepNumber, total_steps: plan.steps.length, reason: `phi-gate-deny:${emit.code}` }
+      yield { kind: 'orchestration_done', result: { completed: false } }
+      return
+    }
     if (!emit) {
       yield { kind: 'step_failed', step, step_number: stepNumber, total_steps: plan.steps.length, reason: 'emit-failed (kernel unreachable?)' }
       yield { kind: 'orchestration_done', result: { completed: false } }
@@ -275,6 +521,15 @@ async function* executeFanOut(
   for (const step of plan.steps) {
     n += 1
     const emit = await emitCommand(step, sessionId, DEFAULT_DEADLINE_SEC)
+    if (isPhiGateDeny(emit)) {
+      // Φ-PHI-Flow B1 — fail-closed in the status fan-out too (additive,
+      // same shape as the emit-failed branch). PHI kinds are not normally
+      // status-class, but the gate must hold on every path that emits.
+      const reason = `phi-gate-deny:${emit.code}`
+      dispatched.push({ step, failed: true, reason, stepNumber: n })
+      yield { kind: 'step_failed', step, step_number: n, total_steps: plan.steps.length, reason }
+      continue
+    }
     if (!emit) {
       dispatched.push({ step, failed: true, reason: 'emit-failed', stepNumber: n })
       yield { kind: 'step_failed', step, step_number: n, total_steps: plan.steps.length, reason: 'emit-failed' }

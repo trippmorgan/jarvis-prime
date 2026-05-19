@@ -38,6 +38,8 @@ const COMMAND_CATALOG: CommandSpec[] = [
   { command_type: 'read-experiment',  targets: ['frank'], description: 'Read a specific Frank experiment by name', argsHint: '{"name":"<experiment-id>"}' },
   { command_type: 'rerun-experiment', targets: ['frank'], description: "Rerun an experiment's question through Frank's brain", argsHint: '{"name":"<experiment-id>"}' },
   { command_type: 'station-query',    targets: ['dj-jarvis'], description: 'WPFQ radio query (now-playing/station-check/dpl-coverage/play-history/upcoming/station-logs)', argsHint: '{"query":"now-playing"}' },
+  { command_type: 'social-draft',     targets: ['prime'], description: 'Read PretoriaFields README/playbook/social strategy and draft a WPFQ X/Twitter post without publishing', argsHint: '{"platform":"x","topic":"now-playing","dry_run":true,"workspace":"/home/tripp/.openclaw/workspace/PretoriaFields"}' },
+  { command_type: 'social-post',      targets: ['prime'], description: 'Prepare or publish a WPFQ social post after reading PretoriaFields README/playbook/social strategy; X/Twitter publishing requires confirmation', argsHint: '{"platform":"x","topic":"now-playing","dry_run":true,"workspace":"/home/tripp/.openclaw/workspace/PretoriaFields"}' },
   { command_type: 'patient-schedule', targets: ['scalpel'], description: 'Today\'s OR schedule, redacted', argsHint: '{"date":"today"}' },
   { command_type: 'ollama-operation', targets: ['frank'], description: 'list/unload/load an Ollama model on Frank', argsHint: '{"op":"list"}' },
 ]

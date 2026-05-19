@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import type { SpawnOptions, SpawnResult } from './types.js'
+import type { SpawnOptions, SpawnResult, SpawnUsage } from './types.js'
 import type { StreamEvent } from './stream-formatter.js'
 
 const DEFAULTS = {
@@ -55,6 +55,9 @@ export async function spawnClaudeStream(
     let timer: ReturnType<typeof setTimeout> | undefined
     let stdoutBuf = ''
     let resultText = ''
+    let usage: SpawnUsage | undefined
+    let costUsd: number | undefined
+    let modelResolved: string | undefined
     const textBlocks: string[] = []
     const stderrChunks: Buffer[] = []
 
@@ -84,8 +87,30 @@ export async function spawnClaudeStream(
         if (!evt) continue
 
         // Capture canonical final text + opportunistic text fallback.
-        if (evt.type === 'result' && typeof evt.result === 'string') {
-          resultText = evt.result
+        if (evt.type === 'result') {
+          if (typeof evt.result === 'string') {
+            resultText = evt.result
+          }
+          // Token usage + cost arrive on the final result event. Both are
+          // optional — older CLI versions or aborted runs may omit them.
+          const u = (evt as unknown as { usage?: Record<string, number> }).usage
+          if (u && typeof u === 'object') {
+            usage = {
+              inputTokens: Number(u.input_tokens) || 0,
+              outputTokens: Number(u.output_tokens) || 0,
+              cacheCreationInputTokens: Number(u.cache_creation_input_tokens) || 0,
+              cacheReadInputTokens: Number(u.cache_read_input_tokens) || 0,
+            }
+          }
+          const c = (evt as unknown as { total_cost_usd?: number }).total_cost_usd
+          if (typeof c === 'number') costUsd = c
+          // Take the first key in modelUsage as the canonical resolved model
+          // (e.g. "claude-sonnet-4-6" when the CLI was invoked with --model sonnet).
+          const mu = (evt as unknown as { modelUsage?: Record<string, unknown> }).modelUsage
+          if (mu && typeof mu === 'object') {
+            const keys = Object.keys(mu)
+            if (keys.length > 0) modelResolved = keys[0]
+          }
         } else if (evt.type === 'assistant') {
           for (const block of evt.message?.content ?? []) {
             if (block.type === 'text' && typeof block.text === 'string') {
@@ -121,6 +146,9 @@ export async function spawnClaudeStream(
         exitCode: code ?? 1,
         durationMs,
         timedOut,
+        usage,
+        costUsd,
+        modelResolved,
       })
     })
 
