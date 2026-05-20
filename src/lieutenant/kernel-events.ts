@@ -57,6 +57,18 @@ export function getAgentId(): string | null {
  * from the provider set in index.ts after kernel-register completes.
  */
 export function emitKernelEvent(input: EmitInput): void {
+  // Hard short-circuit in test environments. Vitest sets VITEST=true;
+  // CI/dev sometimes uses NODE_ENV=test. Without this, processor.test +
+  // corpus-callosum.e2e.test write hundreds of chat-A / chat-W8x events
+  // to the live kernel /events endpoint, polluting the events table that
+  // DIL ingests. Set KERNEL_EVENTS_ALLOW_IN_TEST=1 to bypass this guard
+  // for integration tests that genuinely want to hit the kernel.
+  if (
+    !process.env.KERNEL_EVENTS_ALLOW_IN_TEST &&
+    (process.env.VITEST === "true" || process.env.NODE_ENV === "test")
+  ) {
+    return;
+  }
   if (!cfg) cfg = loadKernelConfig();
   if (!cfg) {
     if (!warnedOnce) {
