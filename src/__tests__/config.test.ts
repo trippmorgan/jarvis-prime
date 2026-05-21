@@ -53,7 +53,7 @@ describe('loadConfig defaults', () => {
     const cfg = loadConfig()
     expect(cfg.PORT).toBe(3100)
     expect(cfg.CLAUDE_MODEL).toBe('sonnet')
-    expect(cfg.CLAUDE_TIMEOUT_MS).toBe(120_000)
+    expect(cfg.CLAUDE_TIMEOUT_MS).toBe(300_000)
     expect(cfg.OPENCLAW_GATEWAY_URL).toBe('http://127.0.0.1:18789')
     expect(cfg.WORKSPACE_DIR).toBe('/home/tripp/.openclaw/workspace')
   })

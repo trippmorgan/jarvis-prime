@@ -4,7 +4,7 @@ import type { SpawnOptions, SpawnResult } from "./types.js";
 const DEFAULTS = {
   claudePath: "/home/tripp/.local/bin/claude",
   model: "sonnet",
-  timeoutMs: 120_000,
+  timeoutMs: 300_000,
 } as const;
 
 /**

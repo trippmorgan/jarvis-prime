@@ -266,7 +266,10 @@ export class MessageProcessor {
       botUsername: config.botUsername,
     })
     this.queue = new MessageQueue((msg) => this.process(msg))
-    this.modeState = new ModeState(config.defaultMode ?? 'single')
+    this.modeState = new ModeState(
+      config.defaultMode ?? 'single',
+      join(config.workingDir, '.data', 'mode-state.json'),
+    )
 
     // Build orchestrator (if dual-brain enabled). Respects injected override for tests.
     if (config.orchestrator) {

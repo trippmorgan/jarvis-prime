@@ -25,7 +25,7 @@ const baseSchema = z.object({
   PORT: z.coerce.number().default(3100),
   CLAUDE_PATH: z.string().default("/home/tripp/.local/bin/claude"),
   CLAUDE_MODEL: z.string().default("sonnet"),
-  CLAUDE_TIMEOUT_MS: z.coerce.number().default(120_000),
+  CLAUDE_TIMEOUT_MS: z.coerce.number().default(300_000),
   OPENCLAW_GATEWAY_URL: z.string().default("http://127.0.0.1:18789"),
   OPENCLAW_GATEWAY_TOKEN: z.string().default(""),
   TELEGRAM_BOT_TOKEN: z.string().default(""),
@@ -62,7 +62,7 @@ const baseSchema = z.object({
   // a Telegram user has long since given up by then, and the W17 orchestrator
   // is the path for genuinely structured/long work — dual-brain is the chat
   // fallback. Raise this only if /deep chat is regularly hitting the cap.
-  LEFT_HEMISPHERE_FAST_TIMEOUT_MS: z.coerce.number().default(90_000),
+  LEFT_HEMISPHERE_FAST_TIMEOUT_MS: z.coerce.number().default(180_000),
   CORPUS_CLINICAL_OVERRIDE: boolFromEnv(false),
   JARVIS_EVOLVING_MESSAGE_ENABLED: boolFromEnv(true),
   RIGHT_BRAIN_AGENT_ENABLED: boolFromEnv(false),
