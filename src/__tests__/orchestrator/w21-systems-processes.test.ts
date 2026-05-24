@@ -1,6 +1,15 @@
 // W21 tests — X-post + morning-show codified as orchestrated processes.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+// execute.ts binds KERNEL_TOKEN at module-load time. vi.hoisted runs
+// BEFORE the module is imported — clearing it prevents orchestrate()
+// from making real HTTP requests to the kernel (kernelFetch short-
+// circuits to null when token is empty, yielding step_failed instantly).
+vi.hoisted(() => {
+  delete process.env.KERNEL_TOKEN
+})
+
 import {
   classifyIntent,
   buildPlan,
