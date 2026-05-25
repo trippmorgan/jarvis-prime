@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "browser-bridge": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/home/tripp/.openclaw/workspace/jarvis-os/mcp-servers/browser-bridge/dist/index.js"],
+      "env": {
+        "CHROME_EXTENSION_PORT": "8080",
+        "SCC_BACKEND_URL": "http://localhost:3002"
+      },
+      "description": "Browser automation MCP - Chrome control, CPT/ICD-10 validation"
+    },
+    "athena-shadow": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/home/tripp/.openclaw/workspace/jarvis-os/mcp-servers/athena-shadow/dist/index.js"],
+      "env": {
+        "FHIR_SERVER": "http://localhost:8081"
+      },
+      "description": "Clinical data MCP - FHIR transform, patient journey tracking"
+    },
+    "chrome-cdp": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/home/tripp/.openclaw/workspace/jarvis-os/mcp-servers/chrome-cdp/dist/index.js"],
+      "env": {
+        "CHROME_DEBUG_PORT": "9222"
+      },
+      "description": "Chrome DevTools Protocol - direct browser control without extension"
+    }
+  }
+}
