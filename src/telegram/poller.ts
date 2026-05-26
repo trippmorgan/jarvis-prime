@@ -173,6 +173,12 @@ export class TelegramPoller {
 
     if (!res.ok) {
       const errText = await res.text().catch(() => `HTTP ${res.status}`)
+
+      if (parseMode && res.status === 400 && errText.includes("can't parse entities")) {
+        this.log.warn({ chatId }, 'Markdown parse failed — retrying sendMessageAndGetId as plain text')
+        return this.sendMessageAndGetId(chatId, text)
+      }
+
       this.log.error({ chatId, status: res.status, error: errText }, 'sendMessageAndGetId failed')
       return null
     }
