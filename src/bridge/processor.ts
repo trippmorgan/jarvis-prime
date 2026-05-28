@@ -6,6 +6,7 @@ import type { SpawnResult } from '../claude/types.js'
 import { formatStreamEvent, type StreamEvent } from '../claude/stream-formatter.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
+import { normalizeSlashInput } from './normalize-slash-input.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
 import {
@@ -357,18 +358,20 @@ export class MessageProcessor {
   }
 
   submit(chatId: string, text: string, userId: string): { messageId: string; position: number } {
+    const normalized = normalizeSlashInput(text)
     this.log.info(
       {
         event: 'message_inbound',
         chatId,
         userId,
-        textLength: text.length,
+        textLength: normalized.length,
+        normalizedDashes: normalized !== text,
         timestamp: Date.now(),
       },
       'message inbound',
     )
 
-    const receipt = this.queue.enqueue({ chatId, text, userId })
+    const receipt = this.queue.enqueue({ chatId, text: normalized, userId })
 
     this.log.info(
       {
