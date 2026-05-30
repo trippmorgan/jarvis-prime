@@ -33,6 +33,8 @@ const KNOWN_SLASH_COMMANDS: ReadonlySet<string> = new Set([
   'deploy',
   'dispatch',
   'dev',
+  'projects',
+  'note',
 ])
 
 export function classifyMessage(input: ClassifyInput): { kind: MessageKind } {

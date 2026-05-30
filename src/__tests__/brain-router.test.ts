@@ -11,6 +11,8 @@ describe('classifyMessage', () => {
       'deploy',
       'dispatch',
       'dev',
+      'projects',
+      'note',
     ]
 
     for (const cmd of knownCommands) {
