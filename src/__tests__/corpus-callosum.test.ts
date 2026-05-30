@@ -323,11 +323,43 @@ describe("corpusCallosum — error paths", () => {
     expect(left.calls.length).toBeLessThanOrEqual(2)
   })
 
-  it("integration failure → IntegrationError thrown (no retry)", async () => {
+  it("integration left timeout → falls back to pass-2 left draft with caveat (DIL 2026-05-26 #3)", async () => {
+    const left = makeFakeClient([
+      { content: "L1", durationMs: 10 },
+      { content: "L2 revised draft", durationMs: 11 },
+      { error: new LeftHemisphereError("left hemisphere timed out after 1000ms") },
+    ])
+    const right = makeFakeClient([
+      { content: "R1", durationMs: 20 },
+      { content: "R2", durationMs: 21 },
+    ])
+    const logger = makeLogger()
+    const deps = buildDeps(left, right, { logger })
+
+    const result = await corpusCallosum(deps, HAPPY_INPUT)
+
+    // Final answer is p2Left content with the fallback caveat prepended.
+    expect(result.finalText).toContain("L2 revised draft")
+    expect(result.finalText).toContain("Integration step timed out")
+
+    // p1 + p2 + 1 integration attempt = 3 total (no retry).
+    expect(left.calls).toHaveLength(3)
+
+    // Observability: fallback emitted as warn event.
+    const fallbackEvent = (logger.warn.mock.calls as Array<Array<unknown>>).find(
+      (args) => {
+        const arg0 = args[0] as { event?: string } | undefined
+        return arg0?.event === "integration_left_fallback"
+      },
+    )
+    expect(fallbackEvent).toBeTruthy()
+  })
+
+  it("integration generic error (non-LeftHemisphere) still throws IntegrationError", async () => {
     const left = makeFakeClient([
       { content: "L1", durationMs: 10 },
       { content: "L2", durationMs: 11 },
-      { error: new LeftHemisphereError("integration fail") },
+      { error: new Error("some unexpected merge bug") },
     ])
     const right = makeFakeClient([
       { content: "R1", durationMs: 20 },
@@ -340,16 +372,8 @@ describe("corpusCallosum — error paths", () => {
       IntegrationError,
     )
 
-    // p1 + p2 + 1 integration attempt = 3 total (no retry)
+    // p1 + p2 + 1 integration attempt = 3 total (no retry).
     expect(left.calls).toHaveLength(3)
-
-    const retryEvent = (logger.warn.mock.calls as Array<Array<unknown>>).find(
-      (args) => {
-        const arg0 = args[0] as { event?: string } | undefined
-        return arg0?.event === "callosum_integration_retry"
-      },
-    )
-    expect(retryEvent).toBeFalsy()
   })
 })
 

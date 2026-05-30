@@ -58,10 +58,21 @@ import type {
 import type { SkillDispatch } from "./dispatch-types.js"
 import {
   IntegrationError,
+  LeftHemisphereError,
   type BrainResult,
   type HemisphereClient,
   type HistoryEntry,
 } from "./types.js"
+
+/**
+ * Caveat prepended to the final answer when the integration-stage left call
+ * fails (typically a timeout) and we fall back to pass-2 left's draft. DIL
+ * 2026-05-26 finding #3 — surface a partial-but-useful result instead of a
+ * hard error to the user. Distinct from SELF_CORRECTION_CAVEAT so router-mode
+ * self-check stripping doesn't trip on it.
+ */
+export const INTEGRATION_FALLBACK_CAVEAT =
+  "_(Integration step timed out — delivering the pre-integration draft. Some refinement may be missing.)_\n\n"
 
 /** Minimal structured logger — subset of Fastify's pino surface. */
 export interface CorpusCallosumLogger {
@@ -496,13 +507,34 @@ export async function corpusCallosum(
       },
       "integration failed",
     )
-    if (err instanceof IntegrationError) {
-      throw err
+    // DIL 2026-05-26 #3 — right-only fallback. If the integration-stage left
+    // call dies (timeout, spawn fail, non-zero exit), we already have a fully
+    // formed pass-2 left draft sitting in p2LeftResult — it's left's revised
+    // take on the merged view, just missing the formal integration polish.
+    // Surface that with a caveat instead of throwing a hard error at the
+    // user. Other error classes (IntegrationError, generic Error) still
+    // propagate so we don't mask merge bugs.
+    if (err instanceof LeftHemisphereError && p2LeftResult.content.trim().length > 0) {
+      logger?.warn(
+        {
+          event: "integration_left_fallback",
+          error: err.message,
+          p2LeftLength: p2LeftResult.content.length,
+        },
+        "integration left failed — falling back to pass-2 left draft",
+      )
+      emit("integration_left_fallback", { durationMs: Date.now() - integrationStart })
+      integrationContent = INTEGRATION_FALLBACK_CAVEAT + p2LeftResult.content
+      integrationCallDurationMs = Date.now() - integrationStart
+    } else {
+      if (err instanceof IntegrationError) {
+        throw err
+      }
+      throw new IntegrationError(
+        `integration failed: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      )
     }
-    throw new IntegrationError(
-      `integration failed: ${err instanceof Error ? err.message : String(err)}`,
-      err,
-    )
   }
 
   // --- Wave 8 / T12 — bounded self-correction (router mode only) -----------

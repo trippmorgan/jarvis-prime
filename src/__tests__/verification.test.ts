@@ -51,7 +51,7 @@ describe('T18: Memory & Skill Preservation', () => {
 
 describe('T19: Claude Code Skills & Agents & Rules', () => {
   it('all skills registered', () => {
-    const skills = ['network-status.md', 'dispatch.md', 'frank-status.md', 'station-check.md', 'deploy.md', 'dev-methodology.md']
+    const skills = ['network-status.md', 'dispatch.md', 'frank-status.md', 'station-check.md', 'deploy.md', 'dev-methodology.md', 'projects.md', 'note.md']
     for (const skill of skills) {
       expect(existsSync(`/home/tripp/.claude/skills/${skill}`)).toBe(true)
     }
