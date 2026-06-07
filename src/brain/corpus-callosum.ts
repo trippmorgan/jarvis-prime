@@ -158,7 +158,69 @@ export type CallosumEventPayload =
 export interface CorpusCallosumInput {
   userMsg: string
   history: HistoryEntry[]
+  /**
+   * Dual-brain timeout telemetry (additive, 2026-06-07). Caller sets this
+   * to `true` when the dispatch is a retry of a prior timed-out dispatch
+   * for the same user turn. Default `false`. Used purely as a structured
+   * log field — no routing or behavior delta.
+   */
+  retry?: boolean
 }
+
+// -----------------------------------------------------------------------------
+// Dual-brain timeout telemetry (additive, 2026-06-07)
+// -----------------------------------------------------------------------------
+//
+// Emits a single structured log event `dual_brain_dispatch_telemetry` per
+// dispatch via the existing logger surface (pino-shape). Fields:
+//   - task_class     "freeform" | "research" | `skill:<name>` (router mode)
+//   - route          "dual-brain" | "integrator-left-fallback" | "dual-brain-errored"
+//   - elapsed_bucket "<60s" | "60-120s" | "120-180s" | "180s-timeout"
+//                    Buckets are picked to straddle the current default
+//                    LEFT_HEMISPHERE_FAST_TIMEOUT_MS (180_000) so dispatches
+//                    can be triaged against the soft ceiling. We do NOT
+//                    reference the threshold value to keep the buckets stable
+//                    if the threshold is tuned. The terminal label name is
+//                    aspirational — anything >=180s falls in it regardless.
+//   - load           int >= 1, concurrent in-flight dispatches at start
+//   - retry          boolean, propagated from input.retry
+//   - outcome        "completed" | "timed_out" | "errored"
+//
+// Strictly additive — no threshold changes, no routing changes, no PHI.
+// -----------------------------------------------------------------------------
+export type DualBrainTelemetryRoute =
+  | "dual-brain"
+  | "integrator-left-fallback"
+  | "dual-brain-errored"
+
+export type DualBrainTelemetryOutcome = "completed" | "timed_out" | "errored"
+
+export type DualBrainTelemetryBucket =
+  | "<60s"
+  | "60-120s"
+  | "120-180s"
+  | "180s-timeout"
+
+export interface DualBrainDispatchTelemetry {
+  event: "dual_brain_dispatch_telemetry"
+  task_class: string
+  route: DualBrainTelemetryRoute
+  elapsed_bucket: DualBrainTelemetryBucket
+  load: number
+  retry: boolean
+  outcome: DualBrainTelemetryOutcome
+}
+
+/** Bucket boundaries straddle the 180s integrator soft-cap. */
+export function bucketElapsed(elapsedMs: number): DualBrainTelemetryBucket {
+  if (elapsedMs < 60_000) return "<60s"
+  if (elapsedMs < 120_000) return "60-120s"
+  if (elapsedMs < 180_000) return "120-180s"
+  return "180s-timeout"
+}
+
+/** Module-level in-flight counter — captured at dispatch start. */
+let inflightDispatches = 0
 
 /**
  * Run the full corpus-callosum flow end to end. Returns the final integrated
@@ -188,6 +250,32 @@ export async function corpusCallosum(
     skillShim,
   } = deps
   const { userMsg, history } = input
+  const retryFlag = input.retry === true
+
+  // --- Dual-brain dispatch telemetry (additive) ----------------------------
+  // Snapshot the in-flight count BEFORE incrementing so `load` reflects the
+  // existing pressure this dispatch entered into. Default task_class is
+  // "freeform" (legacy non-router path); router-mode dispatch parsing
+  // overrides this further down.
+  const dispatchStart = Date.now()
+  const loadAtStart = inflightDispatches + 1
+  inflightDispatches += 1
+  let telemetryTaskClass = "freeform"
+  let telemetryRoute: DualBrainTelemetryRoute = "dual-brain"
+  let telemetryOutcome: DualBrainTelemetryOutcome = "errored"
+  const emitDispatchTelemetry = (): void => {
+    if (!logger) return
+    const payload: DualBrainDispatchTelemetry = {
+      event: "dual_brain_dispatch_telemetry",
+      task_class: telemetryTaskClass,
+      route: telemetryRoute,
+      elapsed_bucket: bucketElapsed(Date.now() - dispatchStart),
+      load: loadAtStart,
+      retry: retryFlag,
+      outcome: telemetryOutcome,
+    }
+    logger.info(payload, "dual-brain dispatch telemetry")
+  }
 
   const emit = (eventName: string, payload?: CallosumEventPayload): void => {
     if (!onEvent) return
@@ -219,6 +307,8 @@ export async function corpusCallosum(
     { event: "callosum_start", userMsgLength: userMsg.length },
     "corpus callosum start",
   )
+
+  try {
 
   // --- Pass 1 ----------------------------------------------------------------
   const pass1PhaseStart = Date.now()
@@ -288,6 +378,7 @@ export async function corpusCallosum(
           // Fall through to research mode.
         } else {
           effectiveDispatch = parsed.dispatch
+          telemetryTaskClass = `skill:${dispatchedSkill}`
           logger?.info(
             { event: "dispatch_parsed", mode: "skill", skill: dispatchedSkill },
             "dispatch parsed (skill)",
@@ -296,6 +387,7 @@ export async function corpusCallosum(
         }
       } else {
         effectiveDispatch = parsed.dispatch
+        telemetryTaskClass = "research"
         logger?.info(
           {
             event: "dispatch_parsed",
@@ -524,6 +616,11 @@ export async function corpusCallosum(
         "integration left failed — falling back to pass-2 left draft",
       )
       emit("integration_left_fallback", { durationMs: Date.now() - integrationStart })
+      // Dual-brain timeout telemetry — fallback path engaged. Outcome stays
+      // "timed_out" because the integrator-left call hit its budget; we still
+      // deliver a useful result via the pass-2 left draft fallback.
+      telemetryRoute = "integrator-left-fallback"
+      telemetryOutcome = "timed_out"
       integrationContent = INTEGRATION_FALLBACK_CAVEAT + p2LeftResult.content
       integrationCallDurationMs = Date.now() - integrationStart
     } else {
@@ -606,6 +703,13 @@ export async function corpusCallosum(
   const totalMs = Date.now() - start
   logger?.info({ event: "callosum_done", totalMs }, "corpus callosum done")
 
+  // Dual-brain timeout telemetry — happy path. `telemetryRoute` may have been
+  // flipped to "integrator-left-fallback" in the integration catch; if so we
+  // keep that label and the "timed_out" outcome rather than overwriting them.
+  if (telemetryRoute !== "integrator-left-fallback") {
+    telemetryOutcome = "completed"
+  }
+
   return {
     finalText,
     trace: {
@@ -645,4 +749,16 @@ export async function corpusCallosum(
   // which captures retry overhead. The individual call duration is available
   // for future extension if needed.
   void integrationCallDurationMs
+
+  } catch (err) {
+    // Dual-brain telemetry — any thrown error (LeftHemisphereError pre-
+    // integration, RightHemisphereError, IntegrationError, generic) lands here
+    // and tags the dispatch as errored before propagating untouched.
+    telemetryRoute = "dual-brain-errored"
+    telemetryOutcome = "errored"
+    throw err
+  } finally {
+    inflightDispatches = Math.max(0, inflightDispatches - 1)
+    emitDispatchTelemetry()
+  }
 }

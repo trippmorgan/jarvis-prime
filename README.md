@@ -12,7 +12,11 @@ Jarvis Prime is the central brain for the Jarvis network. It bridges Telegram wi
 
 **v1.6 — Langfuse observability spine** (Wave 8.8 / 8.8.3, live 2026-04-22). Every Telegram turn opens a root trace (`telegram_message`) finalised with classification kind, tier-0 metadata, path, outcome, and the final response (clinical-redacted under override). Per-phase spans (`tier0_classify`, `dual_brain`) and per-hemisphere generations (`pass1_left`, `pass1_right`, `pass2_left`, `pass2_right`, `integration`, `single_brain_call`) attach to the trace with model name, latency, and pass-2 draft text. Self-hosted on SuperServer at `http://100.80.111.84:3200` (Tailscale-only). Reporter is a thin wrapper around the Langfuse SDK and degrades to a `NoopReporter` when `LANGFUSE_ENABLED=false` or credentials are missing — observability never blocks the conversation path. See [OBSERVABILITY.md](./OBSERVABILITY.md) for dashboard access, query recipes, and PHI policy.
 
-**Status (current, 2026-04-22):** 507/508 tests passing (1 live-only skipped by default), `tsc --noEmit` clean. Bridge live with `JARVIS_TIER0_ENABLED=true` and `LANGFUSE_ENABLED=true`. Tagged `v1.0.0` on `main` (2026-04-21 ship); waves 8.7 + 8.8 + 8.8.3 land on top of the tag.
+**v1.7 — Slash-router whitelist + integration fallback** (live 2026-05-30). Two orthogonal increments:
+- **Slash router whitelist** (commit `9d7233e`). `KNOWN_SLASH_COMMANDS` in `src/brain/router.ts` now carries `projects` + `note` — the router strips slash-commands from brain traffic, so unwhitelisted skill names would never reach skill execution. `/projects` (T0 render-only over the canonical `jarvis-os/.data/project-state` store, no recall fallback — Trust Contract invariant #5) and `/note` (T2 single-row `project_state` upsert with `source=human-note`, the bounded human-override path) ship as first-class contractual skills. See **Slash Skill Router** below.
+- **Integration-left fallback** (commit `7d04811`, DIL 2026-05-26 #3). When pass-2 integration throws `LeftHemisphereError` after one retry, the orchestrator falls back to the pass-2 left draft and appends `INTEGRATION_FALLBACK_CAVEAT` instead of surfacing "Integration failed" to Telegram. `RightHemisphereError` and `IntegrationError` (non-left subclasses) still propagate. The caveat is distinct from `SELF_CORRECTION_CAVEAT` so router-mode strip logic doesn't trip. Emits `callosum_integration_fallback` for observability.
+
+**Status (current, 2026-05-31):** 869/872 tests passing (1 live-only skipped by default; 2 `right-brain-workspace-allowlist` failures predate v1.7 and are tracked as workspace symlink drift, not v1.7 regression). `tsc --noEmit` clean. Bridge live with `JARVIS_TIER0_ENABLED=true` and `LANGFUSE_ENABLED=true`. Tagged `v1.0.0` on `main` (2026-04-21 ship); waves 8.7 + 8.8 + 8.8.3 and v1.7 land on top of the tag.
 
 ---
 
@@ -144,6 +148,7 @@ MessageProcessor
         ├── INTEGRATION (Claude only)
         │     └── integrationPrompt(basePrompt, history, userMsg, p2Left, p2Right)
         │        ── one retry on failure, silent dissent merge
+        │        └─ LeftHemisphereError → fall back to p2Left + INTEGRATION_FALLBACK_CAVEAT (v1.7)
         └── deliver + history.append('assistant', finalText)   ← only final persists
 ```
 
@@ -363,6 +368,7 @@ npm run build        # tsc --noEmit equivalent (emits dist/)
 - **`LeftHemisphereError`** — "Left hemisphere failed: {message}" delivered, `dual_brain_failed` logged with `hemisphere: "left"`
 - **`RightHemisphereError`** — "Right hemisphere failed: {message}" delivered, `hemisphere: "right"`
 - **`IntegrationError`** — "Integration failed after retry: {message}" delivered, `hemisphere: "integration"`
+- **`LeftHemisphereError` at integration (v1.7)** — orchestrator does NOT throw. Final response is the pass-2 left draft with `INTEGRATION_FALLBACK_CAVEAT` appended. `callosum_integration_fallback` logged with the underlying error. `RightHemisphereError` and non-left `IntegrationError` still propagate per the rows above.
 - **Telegram 409** — Another bot polling. 90s backoff, then retry
 - **Missing `OPENCLAW_GATEWAY_TOKEN` when dual-brain enabled** — startup fails (Zod config error)
 
@@ -418,7 +424,8 @@ Every message has a full data-flow trace. Grep one `messageId` across logs to se
 | `callosum_integration_start` | Before integration call | — |
 | `callosum_integration_retry` | Integration failed once, retrying | — |
 | `callosum_integration_ok` | Integration succeeded | `integrationMs` |
-| `callosum_integration_failed` | Integration failed twice | `error` |
+| `callosum_integration_failed` | Integration failed twice (non-left subclass) | `error` |
+| `callosum_integration_fallback` | v1.7 — integration retry failed with `LeftHemisphereError`; orchestrator returned pass-2 left draft + `INTEGRATION_FALLBACK_CAVEAT` instead of throwing | `error`, `caveat: "INTEGRATION_FALLBACK_CAVEAT"` |
 | `callosum_done` | End of orchestrator | `totalMs` |
 
 ### Hemispheres
@@ -490,6 +497,19 @@ jarvis-prime relies on Claude Code's `.claude/` directory for identity and capab
 | `~/.claude/hooks/session-start-context.sh` | Injects HEARTBEAT, MEMORY, node pings at session start |
 | `~/.claude/settings.json` | Auto-allow patterns for SSH, git, npm, system commands |
 
+## Slash Skill Router
+
+`src/brain/router.ts` enforces a `KNOWN_SLASH_COMMANDS` whitelist. The router strips slash-prefixed tokens out of brain traffic so they never reach the dual-brain orchestrator; only whitelisted names dispatch to skill execution. A skill that isn't in the whitelist is invisible to the runtime, even if its files exist in `~/.claude/skills/`.
+
+Contractual skills (T0 → T4 tier model, never silently degrade):
+
+| Skill | Tier | Contract |
+|-------|------|----------|
+| `/projects` | T0 READ | Render-only over the canonical `jarvis-os/.data/project-state` store. No SQL, no parsing, no recall fallback. If the portfolio-surface service is unreachable the skill prints `[T0 READ] /projects — DEGRADED` and exits non-zero (Trust Contract invariant #3); it does NOT fall back to assistant recall. Stale rows render with `⚠`, never hidden (invariant #2). Telegram output MUST agree with the Jarvis OS UI (invariant #5). |
+| `/note` | T2 STAGE | Single-row `project_state` upsert with `source=human-note`. The bounded *human-override* path — used only when the three automated writers (`/dev` phase hook, `state-md-poller`, daily improvement loop) missed a change in time and `/projects` would otherwise show a stale or missing row. Default ownership is `tripp`. Doctrine is still STATE.md → poller → canonical store first; `/note` is fallback paint, not the normal path. |
+
+The whitelist is the enforcement boundary. Adding a new contractual skill = (1) skill files in `~/.claude/skills/<name>/`, (2) entry in `KNOWN_SLASH_COMMANDS`, (3) router test in `src/__tests__/brain-router.test.ts`.
+
 ## MCP Servers
 
 Available to all spawned Claude sessions (account-level):
@@ -503,11 +523,36 @@ Available to all spawned Claude sessions (account-level):
 | Google Calendar | 8 tools — events, scheduling, calendars |
 | Gmail | 2 tools — authenticate, complete auth |
 
+## Deploy Boundary — Committed ≠ Live
+
+A commit on `main` is not a deploy. The running process serves the previous bundle until rebuild + restart. The full chain:
+
+```
+git commit               (code now in main)
+   │
+   ▼
+npm run build            (writes dist/ — verify mtime, not just exit code)
+   │
+   ▼
+pm2 restart jarvis-brain (the live process — name is legacy, runs jarvis-prime/dist/index.js)
+   │
+   ▼
+verify in process        (grep compiled dist/*.js for the new symbol;
+   │                      hit a router-whitelisted skill end-to-end)
+   ▼
+update .planning/STATE.md
+                         (truth marker — drifting STATE.md is how stale
+                          README pointers happen; flip "uncommitted refactor"
+                          to "shipped at <commit>" same turn as the deploy)
+```
+
+Skipping the verify step is how stale `.planning/STATE.md` files appear — STATE says "uncommitted refactor in working tree" hours after the commit landed, because nothing closed the loop. The recovery procedure below is independent of this chain.
+
 ## OpenClaw Rollback
 
-jarvis-prime replaces OpenClaw's Telegram polling on SuperServer. To revert:
+jarvis-prime replaces OpenClaw's Telegram polling on SuperServer. The live process is registered with pm2 as `jarvis-brain` — legacy name from before the dual-brain split; it runs `jarvis-prime/dist/index.js`. To revert:
 
-1. **Stop jarvis-prime** — `pgrep -af "tsx src/index"` → `kill <pid>`
+1. **Stop jarvis-prime** — `pm2 stop jarvis-brain` (or, for a tsx-launched dev process: `pgrep -af "tsx src/index"` → `kill <pid>`)
 2. **Re-enable OpenClaw Telegram** — edit `~/.openclaw/openclaw.json`, set `providers.telegram.enabled = true`
 3. **Restart OpenClaw** — `openclaw restart` (or systemd equivalent)
 4. **Verify** — send test message to @trippassistant_bot; OpenClaw responds via its default gateway
@@ -585,7 +630,7 @@ Spec and plan for the corpus-callosum extension live in the sibling project:
 
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/SPEC.md`
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/PLAN.md`
-- `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/STATE.md`
+- `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/STATE.md` — **drift caveat (2026-05-31):** body still describes the integration-fallback refactor as "uncommitted refactor in working tree." Truth as of v1.7 is that the refactor shipped at commit `7d04811` and is live in the running process. STATE.md rewrite is queued as the immediate next-step task; this README is the truth-of-record until that lands.
 - `/home/tripp/.openclaw/workspace/corpus-callosum/.planning/SMOKE.md` — Wave 5 T17 + Wave 6 S7 manual smoke evidence
 
 v1 planning artifacts (SPEC/PLAN/STATE/TRACES) were in `.planning/` in this tree pre-v1.1.

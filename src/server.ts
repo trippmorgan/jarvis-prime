@@ -87,6 +87,7 @@ export async function buildServer(config: Config): Promise<ServerContext> {
         botToken: config.TELEGRAM_BOT_TOKEN,
         allowedChatIds: [config.TRIPP_CHAT_ID],
         pollTimeoutSecs: 30,
+        offsetPersistPath: `${config.JARVIS_WORKING_DIR}/.data/telegram-offset.json`,
         onMessage: async (chatId, text, userId) => {
           await orchestratorHook(chatId, text, userId)
         },

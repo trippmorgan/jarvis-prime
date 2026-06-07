@@ -91,3 +91,75 @@ export function isShortMessageFastLane(
   if (trimmed.startsWith('/')) return false
   return true
 }
+
+/**
+ * Async-lane difficult-task classifier.
+ *
+ * Returns true when a natural-language message looks like a heavy,
+ * multi-step, or long-running task that will tie up the event loop for
+ * several minutes if run synchronously.  Conservative by design — only
+ * fires on strong signals so that conversational turns never land here
+ * by mistake.
+ *
+ * Signals (ANY of the following):
+ *   1. Length ≥ minChars (default 300) — long messages imply detailed scope.
+ *   2. Presence of "heavy-intent" keywords — research, analyse/analyze,
+ *      build, implement, investigate, audit, refactor, debug, deploy,
+ *      generate, write a plan, diagnose, explain in detail, walk me through.
+ *   3. Multi-step markers — numbered lists (1. / 2.), "step 1", "first …
+ *      then", "and then", "also", "additionally" (≥ 2 of these).
+ *
+ * Pure function — no I/O, no side effects.
+ */
+export interface DifficultTaskOpts {
+  /** Minimum character count to trigger on length alone. Default 300. */
+  minChars?: number
+}
+
+// Patterns indicating research / build / deep-analysis intent.
+// Note: partial-root alternatives (investigat, diagnos) intentionally omit
+// the trailing \b so they match "investigate", "investigating", "diagnosis" etc.
+// Full-word alternatives (research, audit, etc.) retain \b on both sides.
+const HEAVY_INTENT_RE =
+  /\b(research|analys[ei]s|analyz[ei]\w*|build|implement\w*|investigat\w+|audit|refactor|debug\w*|deploy\w*|diagnos\w+|generate|write\s+a\s+plan|explain\s+in\s+detail|walk\s+me\s+through|set\s+up|create\s+a|design\s+a|architect\w*)\b/i
+
+// Markers of multi-step composition inside the message.
+const STEP_MARKERS: readonly RegExp[] = [
+  /^\s*\d+[.)]\s/m,           // "1. " or "1) " at line start
+  /\bstep\s+\d+\b/i,
+  /\bfirst\b.{1,60}\bthen\b/is,
+  /\band\s+then\b/i,
+  /\badditionally\b/i,
+  /\balso[,:]?\s/i,
+  /\bmoreover\b/i,
+  /\bfurthermore\b/i,
+]
+
+export function isDifficultTask(
+  text: string,
+  opts: DifficultTaskOpts = {},
+): boolean {
+  const minChars = opts.minChars ?? 300
+  const trimmed = text.trim()
+
+  // Slash commands are never classified as difficult — they route to the
+  // skill shim which is already fast.
+  if (trimmed.startsWith('/')) return false
+
+  // Signal 1: raw length.
+  if (trimmed.length >= minChars) return true
+
+  // Signal 2: heavy-intent keyword.
+  if (HEAVY_INTENT_RE.test(trimmed)) return true
+
+  // Signal 3: ≥ 2 multi-step markers.
+  let stepCount = 0
+  for (const re of STEP_MARKERS) {
+    if (re.test(trimmed)) {
+      stepCount++
+      if (stepCount >= 2) return true
+    }
+  }
+
+  return false
+}

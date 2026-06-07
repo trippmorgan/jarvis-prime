@@ -12,6 +12,7 @@ import { PromptBuilder } from '../context/prompt-builder.js'
 import {
   classifyMessage,
   isShortMessageFastLane,
+  isDifficultTask,
   type MessageKind,
 } from '../brain/router.js'
 import {
@@ -61,6 +62,7 @@ const ACK_DELAY_MS = 8_000
 const HARD_TIMEOUT_MS = 900_000
 const TELEGRAM_MAX_LENGTH = 4096
 const HISTORY_RELATIVE_PATH = '.data/conversation-history.jsonl'
+const DEFERRED_HEARTBEAT_MS = 5 * 60 * 1_000  // 5-minute progress ping
 
 const RATE_LIMIT_PATTERN = /You[''’]ve hit your limit/i
 
@@ -235,6 +237,18 @@ export interface ProcessorConfig {
    * 'dual' to exercise the orchestrator path.
    */
   defaultMode?: Mode
+  /**
+   * Async-lane killswitch (default true when dual-brain is enabled).
+   * When true, messages classified as "difficult tasks" are ACK'd
+   * immediately and processed asynchronously so the event loop stays
+   * free. Set to false to revert to fully synchronous dual-brain.
+   */
+  deferredTaskEnabled?: boolean
+  /**
+   * Minimum message character count to trigger the deferred lane on
+   * length alone (default 300). Only applies when deferredTaskEnabled.
+   */
+  deferredTaskMinChars?: number
 }
 
 export class MessageProcessor {
@@ -746,7 +760,7 @@ export class MessageProcessor {
     }, ACK_DELAY_MS)
 
     try {
-      const prompt = this.promptBuilder.build(msg.text)
+      const prompt = await this.promptBuilder.build(msg.text)
       this.log.info(
         {
           event: 'prompt_built',
@@ -924,7 +938,7 @@ export class MessageProcessor {
     const stopTyping = responder.startTyping(msg.chatId)
 
     try {
-      const prompt = this.promptBuilder.build(msg.text)
+      const prompt = await this.promptBuilder.build(msg.text)
       this.log.info(
         {
           event: 'prompt_built',
@@ -1077,6 +1091,19 @@ export class MessageProcessor {
   }
 
   private async processDualBrain(msg: QueueMessage, processStart: number): Promise<string> {
+    // Deferred async lane — classify the message difficulty before choosing path.
+    // When enabled (default on for dual-brain), difficult tasks are ACK'd
+    // immediately and processed in a detached async task so /health stays
+    // responsive during long runs.
+    const deferredEnabled = this.config.deferredTaskEnabled !== false
+    if (deferredEnabled && isDifficultTask(msg.text, { minChars: this.config.deferredTaskMinChars })) {
+      this.log.info(
+        { event: 'deferred_task_triggered', messageId: msg.id, textLength: msg.text.length },
+        'difficult task — running async deferred lane',
+      )
+      return this.processDualBrainDeferred(msg, processStart)
+    }
+
     // Evolving-message path — attempt ack first; fall back to legacy if it fails.
     if (this.responder) {
       const msgId = await this.responder.postAck(msg.chatId, INITIAL_ACK_LABEL)
@@ -1089,6 +1116,125 @@ export class MessageProcessor {
       )
     }
     return this.processDualBrainLegacy(msg, processStart)
+  }
+
+  /**
+   * Deferred async dual-brain lane.
+   *
+   * 1. Immediately ACKs Tripp via Telegram ("On it — working now…").
+   * 2. Returns to the queue worker so the event loop stays free.
+   * 3. The heavy dual-brain work runs in a detached async task (via
+   *    setImmediate to yield before starting).
+   * 4. A heartbeat timer posts a progress ping every 5 minutes while
+   *    work is in flight.
+   * 5. Delivers the final answer when the orchestrator resolves.
+   *
+   * The queue sees an immediate synthetic result so it can dequeue and
+   * accept the next message without waiting for the heavy work.
+   */
+  private async processDualBrainDeferred(msg: QueueMessage, processStart: number): Promise<string> {
+    const ACK_TEXT = 'On it — this one needs a bit of work. I\'ll report back when done.'
+
+    // Fire the immediate ACK before detaching.
+    await this.deliver(msg.chatId, ACK_TEXT).catch(() => {})
+
+    this.log.info(
+      { event: 'deferred_task_ack_sent', messageId: msg.id },
+      'deferred ack sent — detaching heavy work',
+    )
+
+    // Append the user turn to history before yielding so the orchestrator
+    // sees the correct context when it eventually runs.
+    // (History was already appended in process() — no double-append needed.)
+
+    // Detach the heavy work: setImmediate yields once to the event loop
+    // so the queue drains the current dequeue before work begins.
+    setImmediate(() => {
+      void this.runDeferredTask(msg, processStart)
+    })
+
+    // Return the synthetic ACK as the queue result — queue is now free.
+    return ACK_TEXT
+  }
+
+  /**
+   * The actual deferred work. Runs outside the queue's await chain so
+   * other messages can be processed concurrently.
+   */
+  private async runDeferredTask(msg: QueueMessage, processStart: number): Promise<void> {
+    const heartbeatMessages = [
+      'Still working on it — this is a meaty one.',
+      'Still going — making progress.',
+      'Almost there — wrapping up.',
+    ]
+    let heartbeatCount = 0
+    let done = false
+
+    // 5-minute heartbeat loop.
+    const heartbeatTimer = setInterval(() => {
+      if (done) return
+      const text = heartbeatMessages[Math.min(heartbeatCount, heartbeatMessages.length - 1)]
+      heartbeatCount++
+      this.log.info(
+        { event: 'deferred_task_heartbeat', messageId: msg.id, heartbeatCount },
+        'deferred task heartbeat',
+      )
+      void this.deliver(msg.chatId, text).catch(() => {})
+    }, DEFERRED_HEARTBEAT_MS)
+
+    try {
+      const basePrompt = await this.promptBuilder.build(msg.text)
+      const history = this.history.getRecent(10)
+
+      this.log.info(
+        {
+          event: 'deferred_task_work_start',
+          messageId: msg.id,
+          promptLength: basePrompt.length,
+          historyEntriesUsed: history.length,
+        },
+        'deferred task work start',
+      )
+
+      const result = await this.orchestrator!({
+        userMsg: msg.text,
+        history,
+        basePrompt,
+        chatId: msg.chatId,
+      })
+
+      done = true
+      clearInterval(heartbeatTimer)
+
+      const output = result.finalText.trim() || '(No output)'
+      this.history.append('assistant', result.finalText)
+
+      this.log.info(
+        {
+          event: 'deferred_task_done',
+          messageId: msg.id,
+          totalMs: result.trace.totalMs,
+          integrationMs: result.trace.integrationMs,
+          outputLen: output.length,
+        },
+        'deferred task done — delivering',
+      )
+
+      // Deliver the final answer in chunks.
+      await this.deliverWithLogging(msg.id, msg.chatId, output, 'success')
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'success', 'legacy', output)
+    } catch (err) {
+      done = true
+      clearInterval(heartbeatTimer)
+
+      const errorMsg = this.formatDualBrainError(err, msg.id)
+      this.log.error(
+        { event: 'deferred_task_error', messageId: msg.id, error: errorMsg },
+        'deferred task failed',
+      )
+      await this.deliver(msg.chatId, `Task failed: ${errorMsg}`).catch(() => {})
+      this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'error', 'legacy', errorMsg)
+    }
   }
 
   /**
@@ -1232,7 +1378,7 @@ export class MessageProcessor {
       // also formats history/userMsg in its own affordance/integration builders.
       // v1 accepts this redundancy — stripping it would require surgery inside
       // PromptBuilder which lives on the single-brain path.
-      const basePrompt = this.promptBuilder.build(msg.text)
+      const basePrompt = await this.promptBuilder.build(msg.text)
       const history = this.history.getRecent(10)
 
       this.log.info(
@@ -1337,7 +1483,7 @@ export class MessageProcessor {
     let cardPosted = false
 
     try {
-      const basePrompt = this.promptBuilder.build(msg.text)
+      const basePrompt = await this.promptBuilder.build(msg.text)
       const history = this.history.getRecent(10)
 
       this.log.info(

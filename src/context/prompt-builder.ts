@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ConversationHistory } from './history.js'
+import { recallMemory } from './memory-recall.js'
 
 const SKILLS_DIR = '/home/tripp/.claude/skills'
 const RULES_DIR = '/home/tripp/.claude/rules'
@@ -25,10 +26,17 @@ export class PromptBuilder {
     this.loadSkills()
   }
 
-  build(userMessage: string): string {
+  async build(userMessage: string): Promise<string> {
     const parts: string[] = []
 
     parts.push(this.getSystemContext())
+
+    // Memory check — consult jarvis-OS shared memory + active projects so Prime
+    // (single AND dual brain, which both build through here) reuses existing
+    // work instead of duplicating it. Fail-soft: returns '' if the kernel is
+    // unreachable, so this never blocks or breaks a reply.
+    const memoryBlock = await recallMemory(userMessage)
+    if (memoryBlock) parts.push(memoryBlock)
 
     const historyBlock = this.history.formatForPrompt(10)
     if (historyBlock) parts.push(historyBlock)

@@ -377,6 +377,115 @@ describe("corpusCallosum — error paths", () => {
   })
 })
 
+describe("corpusCallosum — dual-brain timeout telemetry (2026-06-07)", () => {
+  type TelemetryPayload = {
+    event?: string
+    task_class?: string
+    route?: string
+    elapsed_bucket?: string
+    load?: number
+    retry?: boolean
+    outcome?: string
+  }
+
+  function findTelemetry(
+    logger: ReturnType<typeof makeLogger>,
+  ): TelemetryPayload | undefined {
+    const all = (logger.info.mock.calls as Array<Array<unknown>>).map(
+      (args) => args[0] as TelemetryPayload | undefined,
+    )
+    return all.find((p) => p?.event === "dual_brain_dispatch_telemetry")
+  }
+
+  it("emits structured telemetry on happy-path completion", async () => {
+    const left = makeFakeClient([
+      { content: "L1", durationMs: 5 },
+      { content: "L2", durationMs: 6 },
+      { content: "final", durationMs: 7 },
+    ])
+    const right = makeFakeClient([
+      { content: "R1", durationMs: 8 },
+      { content: "R2", durationMs: 9 },
+    ])
+    const logger = makeLogger()
+    const deps = buildDeps(left, right, { logger })
+
+    await corpusCallosum(deps, HAPPY_INPUT)
+
+    const t = findTelemetry(logger)
+    expect(t).toBeTruthy()
+    expect(t?.task_class).toBe("freeform")
+    expect(t?.route).toBe("dual-brain")
+    expect(t?.outcome).toBe("completed")
+    expect(t?.elapsed_bucket).toBe("<60s")
+    expect(t?.load).toBeGreaterThanOrEqual(1)
+    expect(t?.retry).toBe(false)
+  })
+
+  it("emits route=integrator-left-fallback, outcome=timed_out on integration left timeout", async () => {
+    const left = makeFakeClient([
+      { content: "L1", durationMs: 5 },
+      { content: "L2 draft", durationMs: 6 },
+      { error: new LeftHemisphereError("left hemisphere timed out after 180000ms") },
+    ])
+    const right = makeFakeClient([
+      { content: "R1", durationMs: 8 },
+      { content: "R2", durationMs: 9 },
+    ])
+    const logger = makeLogger()
+    const deps = buildDeps(left, right, { logger })
+
+    await corpusCallosum(deps, HAPPY_INPUT)
+
+    const t = findTelemetry(logger)
+    expect(t).toBeTruthy()
+    expect(t?.route).toBe("integrator-left-fallback")
+    expect(t?.outcome).toBe("timed_out")
+  })
+
+  it("emits route=dual-brain-errored, outcome=errored when a non-fallback error propagates", async () => {
+    const left = makeFakeClient([
+      { content: "L1", durationMs: 5 },
+      { content: "L2", durationMs: 6 },
+      { error: new Error("unexpected merge bug") },
+    ])
+    const right = makeFakeClient([
+      { content: "R1", durationMs: 8 },
+      { content: "R2", durationMs: 9 },
+    ])
+    const logger = makeLogger()
+    const deps = buildDeps(left, right, { logger })
+
+    await expect(corpusCallosum(deps, HAPPY_INPUT)).rejects.toBeInstanceOf(
+      IntegrationError,
+    )
+
+    const t = findTelemetry(logger)
+    expect(t).toBeTruthy()
+    expect(t?.route).toBe("dual-brain-errored")
+    expect(t?.outcome).toBe("errored")
+  })
+
+  it("propagates the retry flag from input into the telemetry payload", async () => {
+    const left = makeFakeClient([
+      { content: "L1", durationMs: 5 },
+      { content: "L2", durationMs: 6 },
+      { content: "final", durationMs: 7 },
+    ])
+    const right = makeFakeClient([
+      { content: "R1", durationMs: 8 },
+      { content: "R2", durationMs: 9 },
+    ])
+    const logger = makeLogger()
+    const deps = buildDeps(left, right, { logger })
+
+    await corpusCallosum(deps, { ...HAPPY_INPUT, retry: true })
+
+    const t = findTelemetry(logger)
+    expect(t?.retry).toBe(true)
+  })
+})
+
 describe("corpusCallosum — logging hygiene", () => {
   it("logger calls do not leak user message or draft content", async () => {
     const secretUserMsg = "SECRET_USER_MSG_ZZZ"

@@ -8,6 +8,7 @@ import { KernelRegister } from "./lieutenant/kernel-register.js";
 import { setAgentIdProvider } from "./lieutenant/kernel-events.js";
 import { warmupClassifierLLM } from "./orchestrator/classify-llm.js";
 import { warmupPlannerLLM } from "./orchestrator/plan-llm.js";
+import { startEventLoopWatchdog } from "./lieutenant/watchdog.js";
 
 const config = loadConfig();
 const { server, processor, poller, reporter } = await buildServer(config);
@@ -37,6 +38,17 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 try {
   await server.listen({ port: config.PORT, host: "0.0.0.0" });
+
+  // Event-loop watchdog — if a turn ever wedges the main thread (the 100%-CPU
+  // freeze), a worker thread kills the process so pm2 restarts it. Paired with
+  // the persisted Telegram offset, the wedging message isn't re-fetched, so the
+  // freeze self-heals in ~1 min instead of hanging. Opt-out via env.
+  if (process.env.JARVIS_WATCHDOG_ENABLED !== "false") {
+    startEventLoopWatchdog({
+      thresholdMs: Number(process.env.JARVIS_WATCHDOG_THRESHOLD_MS ?? 60_000),
+      logger: server.log,
+    });
+  }
 
   // 2026-04-25 — pre-warm tier-0 embedder so the first Telegram turn doesn't
   // pay the ~1300ms cold-start hit (xenova model load + seed vector encoding).

@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import type { FastifyBaseLogger } from 'fastify'
 
 export interface TelegramUpdate {
@@ -19,6 +21,13 @@ export interface TelegramPollerConfig {
   pollTimeoutSecs: number
   onMessage: (chatId: string, text: string, userId: string) => Promise<void>
   logger: FastifyBaseLogger
+  /**
+   * Where to persist the getUpdates offset. When set, the offset survives
+   * restarts so a message that wedges (or crashes) mid-process is NOT
+   * re-fetched on the next boot — prevents the "works once then crashes"
+   * poison-message loop. Absent → in-memory only (legacy behaviour).
+   */
+  offsetPersistPath?: string
 }
 
 export class TelegramPoller {
@@ -27,6 +36,7 @@ export class TelegramPoller {
   private readonly pollTimeout: number
   private readonly onMessage: TelegramPollerConfig['onMessage']
   private readonly log: FastifyBaseLogger
+  private readonly offsetPath: string | null
   private offset = 0
   private running = false
   private abortController: AbortController | null = null
@@ -43,6 +53,36 @@ export class TelegramPoller {
     this.pollTimeout = config.pollTimeoutSecs
     this.onMessage = config.onMessage
     this.log = config.logger
+    this.offsetPath = config.offsetPersistPath ?? null
+    this.loadOffset()
+  }
+
+  /** Restore the persisted getUpdates offset so a poison message isn't re-fetched after a restart. */
+  private loadOffset(): void {
+    if (!this.offsetPath) return
+    try {
+      const raw = readFileSync(this.offsetPath, 'utf-8')
+      const parsed = JSON.parse(raw) as { offset?: number }
+      if (typeof parsed.offset === 'number' && parsed.offset > 0) {
+        this.offset = parsed.offset
+        this.log.info({ offset: this.offset }, 'Telegram offset restored from disk')
+      }
+    } catch {
+      // missing or corrupt — start from 0 (process whatever backlog exists)
+    }
+  }
+
+  /** Persist the advanced offset atomically. Fail-soft: a write error must never break polling. */
+  private persistOffset(): void {
+    if (!this.offsetPath) return
+    try {
+      mkdirSync(dirname(this.offsetPath), { recursive: true })
+      const tmp = this.offsetPath + '.tmp'
+      writeFileSync(tmp, JSON.stringify({ offset: this.offset }) + '\n')
+      renameSync(tmp, this.offsetPath)
+    } catch (err) {
+      this.log.warn({ error: err instanceof Error ? err.message : String(err) }, 'Telegram offset persist failed')
+    }
   }
 
   async start(): Promise<void> {
@@ -262,6 +302,10 @@ export class TelegramPoller {
 
       for (const update of data.result) {
         this.offset = update.update_id + 1
+        // Persist BEFORE handling: if handleUpdate wedges or the process dies
+        // mid-process, the restart resumes PAST this update instead of
+        // re-fetching it forever (the "works once then crashes" loop).
+        this.persistOffset()
         await this.handleUpdate(update)
       }
     } finally {
