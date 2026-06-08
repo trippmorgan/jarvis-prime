@@ -8,6 +8,7 @@ import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
 import { normalizeSlashInput } from './normalize-slash-input.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
+import { TruthLog } from '../context/truth-log.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
 import {
   classifyMessage,
@@ -62,6 +63,9 @@ const ACK_DELAY_MS = 8_000
 const HARD_TIMEOUT_MS = 900_000
 const TELEGRAM_MAX_LENGTH = 4096
 const HISTORY_RELATIVE_PATH = '.data/conversation-history.jsonl'
+// B7 (SPEC §Q1 lock 2026-06-06): append-only TRUTH layer alongside the
+// bounded view above. ConversationHistory tees to TruthLog on every append.
+const TRUTH_LOG_RELATIVE_PATH = '.data/truth-log.jsonl'
 const DEFERRED_HEARTBEAT_MS = 5 * 60 * 1_000  // 5-minute progress ping
 
 const RATE_LIMIT_PATTERN = /You[''’]ve hit your limit/i
@@ -155,6 +159,8 @@ export interface ProcessorConfig {
   /** Telegram bot username (no @) this node serves. */
   botUsername: string
   historyPath?: string
+  /** Path override for the append-only TRUTH log (SPEC §Q1, B7). Tests use this. */
+  truthLogPath?: string
   /** Dual-brain kill-switch. When false, every message takes the single-brain path. */
   corpusCallosumEnabled: boolean
   gatewayUrl: string
@@ -273,8 +279,12 @@ export class MessageProcessor {
     this.config = config
     this.deliver = deliver
     this.log = log
+    const truthLog = new TruthLog(
+      config.truthLogPath ?? join(config.workingDir, TRUTH_LOG_RELATIVE_PATH),
+    )
     this.history = new ConversationHistory(
       config.historyPath ?? join(config.workingDir, HISTORY_RELATIVE_PATH),
+      truthLog,
     )
     this.promptBuilder = new PromptBuilder(this.history, {
       nodeName: config.nodeName,
