@@ -29,8 +29,9 @@ outcome is a stale row gets refreshed.
 ## Usage
 
 ```
-/note <project-slug>
-/note <absolute-path-to-STATE.md>
+/note <project-slug>                          # upsert (T1 WRITE)
+/note <absolute-path-to-STATE.md>             # upsert (T1 WRITE)
+/note --search "<query>" [--limit N]          # vault search (T0 READ)
 ```
 
 Known project slugs (resolve to canonical STATE.md paths):
@@ -46,6 +47,37 @@ Known project slugs (resolve to canonical STATE.md paths):
 | `portfolio-surface` | `jarvis-os/.planning/portfolio-surface/STATE.md` |
 
 Unknown slug → skill exits 1 with the resolver's known-slugs list.
+
+## Search mode (B4 — T0 READ)
+
+`/note --search "<query>"` performs an FTS5 query against the hippocampus
+vault (the migrated memory store from Wave B3) via the hippocampus server
+at `http://127.0.0.1:3401/search`. Pure read — no writes, no external
+calls, no PHI surface.
+
+- `--limit N` — number of results to return (1..50, default 10).
+- The query is URL-encoded; multi-word queries work (`/note --search
+  "morning schedule"`).
+- Matches are highlighted with `*term*` (Telegram-safe) in the snippet.
+- Each result reports atom type (from vault subdirectory), slug, snippet,
+  and relative path under the vault root.
+
+Output format:
+
+```
+[T0 READ] /note --search "<query>"
+N matches for "<query>" (showing K)
+
+1. [project] <slug>
+   <snippet with *highlights*>
+   path: project/<slug>.md
+2. [feedback] <slug>
+   ...
+```
+
+If the hippocampus server is unreachable, the skill exits 2 with the
+curl error. If the query has no matches, it prints `no matches for
+"<query>"` and exits 0.
 
 ## How Claude should invoke this
 
