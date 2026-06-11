@@ -160,6 +160,44 @@ describe('MessageProcessor', () => {
     expect(deliverMock).toHaveBeenCalledWith('123', 'Hello!')
   })
 
+  it('handles /deep immediately at submit() — bypasses the queue (fixes the flaky toggle)', () => {
+    // Hermetic: isolated workingDir so the mode toggle this test triggers is NOT
+    // persisted into the shared /tmp/.data/mode-state.json that other tests read.
+    const dMock = vi.fn().mockResolvedValue(undefined)
+    const wd = mkdtempSync(join(tmpdir(), 'jp-deep-'))
+    const p = new MessageProcessor(
+      {
+        claudePath: '/usr/bin/claude',
+        claudeModel: 'sonnet',
+        claudeTimeoutMs: 120_000,
+        workingDir: wd,
+        nodeName: 'Jarvis Prime',
+        botUsername: 'trippassistant_bot',
+        historyPath: join(wd, 'history.jsonl'),
+        corpusCallosumEnabled: false,
+        gatewayUrl: 'http://127.0.0.1:18789',
+        gatewayToken: 'test-token',
+        rightModel: 'gpt-5.4 codex',
+        corpusCallosumTimeoutMs: 90_000,
+        defaultMode: 'single',
+      },
+      dMock,
+      Fastify({ logger: false }).log,
+    )
+
+    // /deep is intercepted at submit() time and never enqueued, so it can't sit
+    // head-of-line behind a slow in-flight turn (the "flaky toggle" symptom).
+    const qBefore = p.getQueueLength()
+    const receipt = p.submit('123', '/deep', 'user1')
+    expect(receipt.position).toBe(0) // not queued
+    expect(p.getQueueLength()).toBe(qBefore) // queue untouched by /deep
+    expect(dMock).toHaveBeenCalledWith('123', expect.stringContaining('Dual-brain ON')) // single→dual
+
+    // Flipping back is also immediate.
+    p.submit('123', '/deep', 'user1')
+    expect(dMock).toHaveBeenCalledWith('123', expect.stringContaining('Claude solo'))
+  })
+
   it('reports queue position correctly', () => {
     // The processor uses submit() which is sync — test the return values
     vi.mocked(spawnClaude).mockImplementation(() =>

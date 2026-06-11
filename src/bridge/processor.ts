@@ -26,6 +26,7 @@ import { LeftHemisphereClient } from '../brain/left-hemisphere.js'
 import { RightHemisphereClient } from '../brain/right-hemisphere.js'
 import { makeRightClient } from '../brain/right-client-factory.js'
 import { Tier0Classifier, type Tier0Result } from '../brain/tier0-classifier.js'
+import { randomUUID } from 'node:crypto'
 import { ModeState, type Mode } from './mode-state.js'
 import {
   NoopReporter,
@@ -395,6 +396,17 @@ export class MessageProcessor {
       'message inbound',
     )
 
+    // /deep is a trivial mode toggle, not an LLM turn — handle it immediately
+    // so it never sits behind a slow dual-brain message in the queue (the
+    // "flaky /deep" symptom: the toggle appeared to do nothing because it was
+    // waiting head-of-line behind a 180s+ turn).
+    const deepCmd = matchDeepCommand(normalized)
+    if (deepCmd) {
+      const messageId = randomUUID()
+      this.handleDeepImmediate(messageId, chatId, deepCmd)
+      return { messageId, position: 0 }
+    }
+
     const receipt = this.queue.enqueue({ chatId, text: normalized, userId })
 
     this.log.info(
@@ -700,6 +712,27 @@ export class MessageProcessor {
     await this.deliver(msg.chatId, reply).catch(() => {})
     this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'legacy', reply)
     return reply
+  }
+
+  /**
+   * Queue-bypass handler for /deep. Toggles mode + replies immediately at
+   * submit() time so the toggle never waits behind an in-flight LLM turn. No
+   * trace / history / queue — a mode flip is pure state. Fail-soft delivery.
+   */
+  private handleDeepImmediate(messageId: string, chatId: string, action: 'toggle' | 'status'): void {
+    const previous = this.modeState.current
+    const mode = action === 'toggle' ? this.modeState.toggle() : previous
+    const reply =
+      mode === 'dual'
+        ? '🧠 Dual-brain ON — Claude + Codex collaborating. /deep again to flip back.'
+        : '⚡ Claude solo. /deep again to engage dual-brain.'
+
+    this.log.info(
+      { event: 'deep_command', messageId, action, previousMode: previous, mode, bypass: true },
+      `/deep ${action} → ${mode} (queue bypass)`,
+    )
+
+    void this.deliver(chatId, reply).catch(() => {})
   }
 
   /**
