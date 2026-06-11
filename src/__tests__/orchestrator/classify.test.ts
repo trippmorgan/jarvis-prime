@@ -83,4 +83,50 @@ describe('classifyIntent', () => {
     expect(classifyIntent('station logs')).toBe('query')
     expect(classifyIntent('check what\'s playing on the radio')).toBe('query')
   })
+
+  // AVSO v2 — free-text input write rules (classify.ts lines 71/74). These
+  // are the rules whose `(?:\w+[-\s]?)*` modifier-word group was rewritten
+  // to the linear `[\w\s-]*?` (see ReDoS regression below). Confirm the
+  // rewrite preserved the original matching intent: a write verb + an
+  // explicit destination field still classifies as workflow.
+  it('AVSO v2 — free-text write into a field classifies as workflow', () => {
+    expect(classifyIntent('type my findings into the assessment')).toBe('workflow')
+    expect(classifyIntent('dictate into the chief complaint box')).toBe('workflow')
+    expect(classifyIntent('enter the value in the medication field')).toBe('workflow')
+    expect(classifyIntent('set the assessment to stable')).toBe('workflow')
+    expect(classifyIntent('set the problem list to hypertension')).toBe('workflow')
+  })
+
+  // Regression: catastrophic-backtracking ReDoS in classify.ts rules 71/74.
+  //
+  // The production crash-loop (2026-06-11): a long, benign natural-language
+  // message ("please type my note in word word word …") walked into the
+  // nested quantifier `(?:\w+[-\s]?)*`, wedging the main event loop until
+  // the 60s watchdog SIGKILL'd the process. Telegram then re-delivered the
+  // same message on every restart → crash-loop. classifyIntent runs
+  // SYNCHRONOUSLY before enqueue, so this hung before the poison-loop guard
+  // could ever fire.
+  //
+  // These inputs hit rules 71 and 74 with many modifier words and NO
+  // trailing field keyword — the exact shape that backtracked exponentially.
+  // With the linear `[\w\s-]*?` rewrite the call must return effectively
+  // instantly. The generous 500ms budget would still be blown by orders of
+  // magnitude (the old regex never returned) while never flaking on a CI box.
+  it('does not catastrophically backtrack on long benign prose (ReDoS guard)', () => {
+    const words = 'word '.repeat(60).trim()
+    const cases = [
+      `please type my note in ${words}`,       // rule 71: write verb + "in" + no field kw
+      `dictate into the ${words}`,              // rule 71: write verb + "into" + no field kw
+      `set the ${words} to something else`,     // rule 74: "set the" + no field kw before "to"
+    ]
+    for (const input of cases) {
+      const start = performance.now()
+      const result = classifyIntent(input)
+      const elapsed = performance.now() - start
+      expect(elapsed).toBeLessThan(500)
+      // None of these contain a field keyword, so they fall through to chat —
+      // the point of the test is that they return FAST, not what they return.
+      expect(result).toBe('chat')
+    }
+  })
 })
