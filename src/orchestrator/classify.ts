@@ -68,10 +68,10 @@ const RULES: ClassRule[] = [
   // prepare(T1)→commit(T3) plan (or v2b-deferred / clarify). The
   // dictated text is PHI — classify carries only the class; redaction is
   // plan.ts's job (placeholder + corr-id).
-  { pattern: /\b(?:type|dictate|enter|write|put|insert|add|append)\b[^.\n]*?\b(?:in|into|onto|on)\s+(?:the\s+)?(?:\w+[-\s]?)*\b(?:field|box|note|hpi|history|assessment|plan|complaint|impression|comment|free[-\s]?text|chief\s+complaint|problem\s+list|medication|meds?|order|orders?|diagnos[ei]s|dx|icd|disposition|allerg(?:y|ies))\b/i, klass: 'workflow' },
+  { pattern: /\b(?:type|dictate|enter|write|put|insert|add|append)\b[^.\n]*?\b(?:in|into|onto|on)\s+(?:the\s+)?[\w\s-]*?\b(?:field|box|note|hpi|history|assessment|plan|complaint|impression|comment|free[-\s]?text|chief\s+complaint|problem\s+list|medication|meds?|order|orders?|diagnos[ei]s|dx|icd|disposition|allerg(?:y|ies))\b/i, klass: 'workflow' },
   { pattern: /\b(?:type|dictate|enter|write|insert|append)\s+["'].+?["']/i, klass: 'workflow' },
   { pattern: /\b(?:add|append|put)\s+["'].+?["']\s+(?:in|into|onto|to|on)\b/i, klass: 'workflow' },
-  { pattern: /\bset\s+(?:the\s+)?(?:\w+[-\s]?)*\b(?:hpi|history|assessment|plan|note|impression|comment|disposition|problem\s+list|medication|meds?|order|orders?|diagnos[ei]s|dx|icd|allerg(?:y|ies))\b\s+to\b/i, klass: 'workflow' },
+  { pattern: /\bset\s+(?:the\s+)?[\w\s-]*?\b(?:hpi|history|assessment|plan|note|impression|comment|disposition|problem\s+list|medication|meds?|order|orders?|diagnos[ei]s|dx|icd|allerg(?:y|ies))\b\s+to\b/i, klass: 'workflow' },
 
   // Clinical query (PHI path; PHI redactor must fire)
   // W21.10 — clinical / Athena. "use the athena skill" and "check my

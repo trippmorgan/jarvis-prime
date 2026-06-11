@@ -9,6 +9,7 @@ import { setAgentIdProvider } from "./lieutenant/kernel-events.js";
 import { warmupClassifierLLM } from "./orchestrator/classify-llm.js";
 import { warmupPlannerLLM } from "./orchestrator/plan-llm.js";
 import { startEventLoopWatchdog } from "./lieutenant/watchdog.js";
+import { startDeathWatch } from "./lieutenant/death-watch.js";
 
 const config = loadConfig();
 const { server, processor, poller, reporter } = await buildServer(config);
@@ -46,6 +47,23 @@ try {
   if (process.env.JARVIS_WATCHDOG_ENABLED !== "false") {
     startEventLoopWatchdog({
       thresholdMs: Number(process.env.JARVIS_WATCHDOG_THRESHOLD_MS ?? 60_000),
+      logger: server.log,
+    });
+  }
+
+  // Death-watch — rolling pre-mortem snapshot. prime has been dying by
+  // external SIGKILL (-9) with EMPTY stderr: not the watchdog (it logs first),
+  // not a Node crash (no stack trace), not a graceful SIGTERM (logs "Shutting
+  // down"). A SIGKILL can't be caught, so we persist memory/queue snapshots to
+  // .data/crash-trace.log; the tail after a kill is the state at death, which
+  // tells us if it's memory pressure / Jetsam (rss climbing) or not. Opt-out
+  // via env. Path mirrors the offsetPersistPath convention in server.ts.
+  if (process.env.JARVIS_DEATHWATCH_ENABLED !== "false") {
+    startDeathWatch({
+      path: `${config.JARVIS_WORKING_DIR}/.data/crash-trace.log`,
+      intervalMs: Number(process.env.JARVIS_DEATHWATCH_INTERVAL_MS ?? 10_000),
+      getQueueDepth: () => processor.getQueueLength(),
+      isProcessing: () => processor.isProcessing(),
       logger: server.log,
     });
   }
