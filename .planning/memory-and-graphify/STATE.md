@@ -176,4 +176,11 @@ All read-only. Zero mutations. Full reports retained in conversation history.
   - B7.3 (ranked-source resolver): shipped in `266426f` alongside the service. 12 conflict tests green.
   - B7.4 (demo): walkthrough script at `.planning/memory-and-graphify/demo-b7.4/run-demo.sh`. Verdict: PASS — human-note (rank 2) collapsed auto-memory (rank 3) under `applyPrecedence=true` against an isolated demo vault. The resolver is observable end-to-end.
 
-**Track B status:** B1 → B7 complete. Only B8 (MCS primitive) remains.
+**Track B status:** B1 → B8 complete. Track B closed (2026-06-16).
+
+- **B8 (MCS primitive):**
+  - Q3 / Q4 locked 2026-06-16: drift N=10, soft heartbeat = 2 days, hard = 14 days, dry-run grace = 7 days then auto-promote.
+  - jarvis-os: `feat(mcs): wave B8 — Memory Consolidation Session primitive` (`12405a5`) — 17 files / +2047 LOC. Adds `src/services/memory-consolidation/` (orchestrator, writeback, regen, CLI), `mcs-prep` pg-boss handler (hard-isolated), schedule `'0 5 */2 * *'`, router capability `memory-consolidation`.
+  - jarvis-prime: `/mcs` skill at `skills/mcs/{mcs.md,mcs.sh}` — wraps `scripts/run-mcs-prep.mjs` with subcommands `status / prep / writeback / regen`.
+  - Tests: 21 vitest passes (orchestrator + writeback integration + heartbeat triggers + parser).
+  - Live smoke (2026-06-16): `prep` rendered `MCS-2026-06-16.md` from 21 project_state + 28 vault atoms; `regen` produced a 13.3 kB MEMORY.md preview; `.state.json` initialized.
