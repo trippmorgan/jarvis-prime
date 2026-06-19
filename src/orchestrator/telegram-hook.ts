@@ -762,7 +762,29 @@ export async function handleAthenaConfirmReply(
     fieldId: resolution.field,
     correlationId: resolution.correlationId,
   })
-  await cfg.dispatchCommit(step)
+  // The kernel-bound dispatch can reject (kernel down / network error).
+  // If it does, the ledger entry is already consumed and the gate is
+  // already cleared, but the write did NOT reach the kernel — so the
+  // honest outcome is "not confirmed", the audit block is deny:cancelled
+  // (nothing executed downstream), and the failure must NOT propagate
+  // uncaught into the Telegram poller. The error is non-PHI by
+  // construction (the redacted step carries `<WRITE_TEXT>`, never the
+  // staged text), but we deliberately do not echo it to avoid leaking
+  // any kernel-side detail into the chat.
+  try {
+    await cfg.dispatchCommit(step)
+  } catch {
+    // Dispatch failed — emit the deny block (the write was authorized by
+    // the human but NOT executed) and tell Tripp honestly. Single-use
+    // entry is already gone; he must re-stage to retry.
+    emitPhiGateBlock('deny:cancelled')
+    await cfg.deliver(
+      chatId,
+      `⚠️ Couldn't reach Athena to write that (field *${resolution.field}*) — ` +
+        `not confirmed. Nothing was written. Please re-stage the write to retry.`,
+    )
+    return { handled: true, committed: false }
+  }
   // B3 two-phase: emit the signed allow block POST-dispatch / PRE-return
   // (PLAN T8 AC — "authorized/executed"). Keyed off the redacted corrId;
   // the committed write text is never an input to this block.
