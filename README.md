@@ -16,7 +16,93 @@ Jarvis Prime is the central brain for the Jarvis network. It bridges Telegram wi
 - **Slash router whitelist** (commit `9d7233e`). `KNOWN_SLASH_COMMANDS` in `src/brain/router.ts` now carries `projects` + `note` — the router strips slash-commands from brain traffic, so unwhitelisted skill names would never reach skill execution. `/projects` (T0 render-only over the canonical `jarvis-os/.data/project-state` store, no recall fallback — Trust Contract invariant #5) and `/note` (T2 single-row `project_state` upsert with `source=human-note`, the bounded human-override path) ship as first-class contractual skills. See **Slash Skill Router** below.
 - **Integration-left fallback** (commit `7d04811`, DIL 2026-05-26 #3). When pass-2 integration throws `LeftHemisphereError` after one retry, the orchestrator falls back to the pass-2 left draft and appends `INTEGRATION_FALLBACK_CAVEAT` instead of surfacing "Integration failed" to Telegram. `RightHemisphereError` and `IntegrationError` (non-left subclasses) still propagate. The caveat is distinct from `SELF_CORRECTION_CAVEAT` so router-mode strip logic doesn't trip. Emits `callosum_integration_fallback` for observability.
 
-**Status (current, 2026-05-31):** 869/872 tests passing (1 live-only skipped by default; 2 `right-brain-workspace-allowlist` failures predate v1.7 and are tracked as workspace symlink drift, not v1.7 regression). `tsc --noEmit` clean. Bridge live with `JARVIS_TIER0_ENABLED=true` and `LANGFUSE_ENABLED=true`. Tagged `v1.0.0` on `main` (2026-04-21 ship); waves 8.7 + 8.8 + 8.8.3 and v1.7 land on top of the tag.
+**Status (2026-05-31 snapshot):** 869/872 tests passing (1 live-only skipped by default; 2 `right-brain-workspace-allowlist` failures predate v1.7 and are tracked as workspace symlink drift, not v1.7 regression). `tsc --noEmit` clean. Bridge live with `JARVIS_TIER0_ENABLED=true` and `LANGFUSE_ENABLED=true`. Tagged `v1.0.0` on `main` (2026-04-21 ship); waves 8.7 + 8.8 + 8.8.3 and v1.7 land on top of the tag.
+
+> **⚠ Truth-of-record (2026-06-14):** active development has continued on branch
+> **`feat/dual-brain-timeout-telemetry`**, well past the v1.7 / W21 state the rest of
+> this README describes. Several defaults and subsystems below have changed — most
+> importantly **dual-brain is no longer always-on; it is opt-in via `/deep`**, and a
+> **memory spine** (truth-log + hippocampus vault) now sits under every turn. See
+> [**Current state — June 2026**](#current-state--june-2026) immediately below for what
+> is actually live; treat the older v1.x / v2 sections as historical waves, not current
+> behavior, where they conflict.
+
+---
+
+## Current state — June 2026
+
+Everything below this point lands on `feat/dual-brain-timeout-telemetry` on top of the
+v2 / W21 baseline. Where it contradicts an older section (e.g. "Dual-brain always-on"
+in Key Design Decisions), **this section wins.**
+
+### Default flow flipped: single-brain + tools, dual-brain opt-in (`/deep`)
+
+The dual-brain corpus callosum is no longer the default for natural messages. As of the
+2026-04-23 flip, the default path is **single-brain Claude with tools on**; the full
+dual-brain (Claude + Codex, 5 LLM calls) is **opt-in per chat via `/deep`**.
+
+- `/deep` — immediate **queue-bypass** toggle (commit `e1dcbc9`): it flips mode and
+  replies right away rather than waiting behind the message queue (fixes the earlier
+  "flaky /deep — looked like it did nothing" symptom).
+- `/deep status` — reports current mode without flipping.
+- Mode persists to `.data/mode-state.json`; **a brain restart resets to single-brain.**
+- Replies: `🧠 Dual-brain ON …` / `⚡ Claude solo. /deep to engage dual-brain.`
+
+### Memory spine — truth-log split, recall, hippocampus vault
+
+Prime now has a persistent memory substrate under every turn (Wave B-series):
+
+- **Truth-log split** (commit `3292d65`, B7) — `src/context/truth-log.ts` is an
+  **append-only TRUTH layer**: every user/assistant turn is recorded, never trimmed,
+  never rewritten. `ConversationHistory` is demoted to a bounded **VIEW** that feeds the
+  prompt window. The precedence rule "most recent confirmed statement wins" now has an
+  immutable record to be true about. Reads (`getAll`/`count`) are off the hot path.
+- **Memory recall** (`src/context/memory-recall.ts`) — before answering, Prime consults
+  jarvis-OS shared memory so it doesn't re-do work or answer with stale project context.
+  Pulls two kernel surfaces (auth'd with `KERNEL_TOKEN`): Hippocampus search
+  (`GET /api/v1/hippocampus/search`) and active projects (`GET /api/v1/projects`).
+  **Fail-soft + timeout-bounded (2.5s):** any error or kernel-down returns `''`, so
+  recall can never block or break a reply. Shared by single- and dual-brain via
+  `PromptBuilder.build`. Kill-switch: `JARVIS_MEMORY_RECALL_ENABLED=false`.
+- **Hippocampus vault** — the migrated memory store (Wave B3), served with an FTS5 index
+  at `http://127.0.0.1:3401/search`. Surfaced to Telegram read-only via
+  `/note --search "<query>" [--limit N]` (**T0 READ**) — URL-encoded multi-word queries,
+  `*term*` highlighting, results tagged by atom type / slug / path.
+
+### `/note` + `/projects` — contractual portfolio skills
+
+- `/note <slug>` — **T1 WRITE** human-override portfolio upsert: re-reads the project's
+  on-disk `STATE.md` and re-runs the canonical `project_state` upsert tagged
+  `source=human-note`. It does **not** mutate STATE.md — edit STATE.md first, then push.
+  The bounded fallback for when the automated writers missed a change.
+- `/note --search` — the **T0 READ** front-door over the hippocampus vault (above).
+- `/projects` — **T0 render-only** over the canonical project-state store (see
+  [Slash Skill Router](#slash-skill-router)); both are router-whitelisted in
+  `KNOWN_SLASH_COMMANDS`.
+
+### Classifier hardening — ReDoS fix + death-watch
+
+The intent classifier's clinical write-intent patterns carried a
+**catastrophic-backtracking (ReDoS) regex** that could hang a turn. Commits `4ea3c48`
+(kill the ReDoS, add a regex "death-watch") and `664c0b5` fix it and fold in regression
+tests — including a **ReDoS regression test contributed by the Argus security node**, which
+reviews the orchestrator's own regex surface. (Nice loop; also why the security node's own
+posture matters — see `jarvis-agent/STATUS.md` and the brain guardrail hook on Argus.)
+
+### Stability + timeout/telemetry (the branch's namesake)
+
+- **Stability hardening** (commit `78695c7`) — poison-loop guard, watchdog, async
+  deferred lane, alongside the memory-recall wiring.
+- **Timeout/telemetry** — mode persisted to disk to prevent silent dual→single fallback
+  (`65490e4`); hemisphere/hard caps and integration-retry behavior tuned (`2556f47`,
+  `15f854a`); rate-limit detection + usage tracking (`3a78403`).
+- **Local MCPs registered** (`fd9637d`) — `athena-shadow`, `browser-bridge`, `chrome-cdp`.
+
+> Per-node note: on **Argus** (Mac mini) this same service runs as the node's brain. The
+> spawned `claude` there uses `--dangerously-skip-permissions`; a PreToolUse **guardrail
+> hook** (audit log + catastrophe deny-list, scoped via `JARVIS_BRAIN_GUARD`) is layered
+> on so the security node isn't running an unaudited, unbounded shell. See
+> `~/.claude/settings.json` hooks + `jarvis-prime/scripts/brain-guard.sh`.
 
 ---
 
