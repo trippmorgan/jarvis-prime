@@ -4,33 +4,6 @@ import { MessageProcessor } from "./bridge/processor.js";
 import { registerMessageRoute } from "./routes/message.js";
 import { TelegramPoller } from "./telegram/poller.js";
 import { makeReporter, type Reporter } from "./observability/langfuse-reporter.js";
-import { createTelegramOrchestratorHook } from "./orchestrator/telegram-hook.js";
-import { reviewOrchestratorReply, type OversightTurn } from "./orchestrator/intent-oversight.js";
-import { readFileSync } from "node:fs";
-import { resolve as pathResolve } from "node:path";
-
-// W21.7 — pull the last few conversation turns so the intent-oversight
-// judge can read terse messages ("Update", "Publish") in context.
-function recentConversationTurns(limit = 6): OversightTurn[] {
-  try {
-    const p = pathResolve(process.cwd(), ".data/conversation-history.jsonl");
-    const lines = readFileSync(p, "utf8").trim().split("\n");
-    const turns: OversightTurn[] = [];
-    for (const ln of lines.slice(-limit)) {
-      try {
-        const o = JSON.parse(ln) as { role?: string; content?: string };
-        if ((o.role === "user" || o.role === "assistant") && o.content) {
-          turns.push({ role: o.role, content: o.content });
-        }
-      } catch {
-        /* skip unparseable line */
-      }
-    }
-    return turns;
-  } catch {
-    return [];
-  }
-}
 
 export interface ServerContext {
   server: FastifyInstance
@@ -57,31 +30,12 @@ export async function buildServer(config: Config): Promise<ServerContext> {
     logger: server.log,
   });
 
-  // W17: orchestrator hook intercepts non-chat intents (query/workflow/
-  // status) and runs them through the command layer. Chat messages fall
-  // through to MessageProcessor unchanged.
-  const orchestratorHook = createTelegramOrchestratorHook({
-    deliver: async (chatId, text) => {
-      if (poller) await poller.sendMessage(chatId, text, 'Markdown')
-    },
-    onChat: (chatId, text, userId) => {
-      processor.submit(chatId, text, userId)
-    },
-    // W21.7 — re-read auto/deterministic replies against context.
-    reviewIntent: async ({ userText, autoReply, klass }) => {
-      try {
-        return await reviewOrchestratorReply({
-          userText,
-          autoReply,
-          klass,
-          recentTurns: recentConversationTurns(),
-        })
-      } catch {
-        return { ok: true }
-      }
-    },
-  })
-
+  // 2026-06-26 — Telegram workflow orchestrator REMOVED (Tripp's call).
+  // The old plain-English workflow / T3 publish-gate router (W17/W21) never
+  // worked reliably and repeatedly wedged radio-station and other tasks.
+  // Telegram messages now go straight to the conversational brain
+  // (MessageProcessor). The Athena clinical-write confirm path lives in a
+  // separate, un-wired module and is unaffected by this removal.
   const poller = (!config.JARVIS_TELEGRAM_DISABLED && config.TELEGRAM_BOT_TOKEN)
     ? new TelegramPoller({
         botToken: config.TELEGRAM_BOT_TOKEN,
@@ -89,7 +43,7 @@ export async function buildServer(config: Config): Promise<ServerContext> {
         pollTimeoutSecs: 30,
         offsetPersistPath: `${config.JARVIS_WORKING_DIR}/.data/telegram-offset.json`,
         onMessage: async (chatId, text, userId) => {
-          await orchestratorHook(chatId, text, userId)
+          processor.submit(chatId, text, userId)
         },
         logger: server.log,
       })
