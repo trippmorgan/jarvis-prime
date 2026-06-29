@@ -79,6 +79,32 @@ function isRateLimitOutput(result: SpawnResult): boolean {
   )
 }
 
+// 2026-06-28 — Auth-failure detection. When the spawned `claude` CLI's
+// credentials are dead it prints a short terminal error like
+// "Not logged in · Please run /login" — to stdout, often with exit 0 — and
+// the bridge used to relay that verbatim AS the answer AND append it to
+// history, poisoning context. Worse, a Telegram `/login` reply was fed back
+// to the same dead CLI, producing the same line: an infinite loop. We now
+// detect that output and short-circuit to an honest system error that is
+// NEVER written to history (see processSingleBrain*).
+//
+// `/login` (the CLI's own remediation string) is the most characteristic
+// marker; a genuine model answer almost never emits it. The short-output
+// guard is belt-and-suspenders so a long, legitimate reply that merely
+// mentions the phrase can't be misclassified as an auth failure.
+const AUTH_FAILURE_PATTERN =
+  /please run \/login|not logged in|invalid api key|oauth token (has )?expired|authentication_error|failed to authenticate|invalid authentication credentials|api error:\s*401/i
+
+function isAuthFailureOutput(result: SpawnResult): boolean {
+  if (!AUTH_FAILURE_PATTERN.test(result.output) && !AUTH_FAILURE_PATTERN.test(result.stderr)) {
+    return false
+  }
+  // A real CLI auth failure is short and terminal. Only treat it as such
+  // when stdout is short OR the process exited nonzero — never clobber a
+  // long, successful answer that happens to contain the phrase.
+  return result.output.trim().length < 240 || result.exitCode !== 0
+}
+
 /**
  * Build the langfuse-shaped usage/cost/model overrides from a SpawnResult.
  * Returns an empty object when the CLI didn't emit usage data so the existing
@@ -147,6 +173,18 @@ export function matchDeepCommand(text: string): 'toggle' | 'status' | null {
   if (trimmed === '/deep') return 'toggle'
   if (trimmed === '/deep status') return 'status'
   return null
+}
+
+/**
+ * Match `/login` / `/logout` (with or without args). These authenticate the
+ * `claude` CLI on the HOST and cannot be performed from Telegram — forwarding
+ * them to the model just feeds a dead CLI, which replies "Not logged in ·
+ * Please run /login", which looks like another `/login` prompt: the loop Tripp
+ * hit. We intercept at submit() and answer directly instead of spawning.
+ */
+export function matchLoginCommand(text: string): boolean {
+  const trimmed = text.trim().toLowerCase()
+  return /^\/log(in|out)\b/.test(trimmed)
 }
 
 export interface ProcessorConfig {
@@ -407,6 +445,16 @@ export class MessageProcessor {
       return { messageId, position: 0 }
     }
 
+    // /login (and /logout) authenticate the host-side `claude` CLI; they can't
+    // be done from Telegram. Intercept BEFORE the queue/spawn so the command is
+    // never fed to a dead CLI (which would echo "Not logged in · Please run
+    // /login" — the loop). Answer directly.
+    if (matchLoginCommand(normalized)) {
+      const messageId = randomUUID()
+      this.handleLoginImmediate(messageId, chatId)
+      return { messageId, position: 0 }
+    }
+
     const receipt = this.queue.enqueue({ chatId, text: normalized, userId })
 
     this.log.info(
@@ -553,10 +601,18 @@ export class MessageProcessor {
       'classification',
     )
 
+    // When the user has explicitly opted into dual-brain via /deep, that is a
+    // hard request for both hemispheres on EVERY natural message — no length,
+    // shape, or embedding shortcut may downgrade it to single-brain. The fast
+    // lanes below exist only to speed up the default (single) mode; they are
+    // suppressed entirely while dual mode is active.
+    const dualModeActive = this.modeState.current === 'dual'
+
     // W8.7.1 — Short-message fast lane. Pure-shape heuristic that runs BEFORE
     // tier-0 (saves the embedding round-trip when shape alone is decisive).
     // Short, non-question, non-slash natural messages route to single-brain.
     const shortFastLane =
+      !dualModeActive &&
       classification.kind === 'natural' &&
       this.config.corpusCallosumEnabled &&
       this.config.shortMessageFastLaneEnabled !== false &&
@@ -584,6 +640,7 @@ export class MessageProcessor {
     if (
       classification.kind === 'natural' &&
       !shortFastLane &&
+      !dualModeActive &&
       this.config.corpusCallosumEnabled &&
       this.tier0Classifier !== null
     ) {
@@ -736,6 +793,42 @@ export class MessageProcessor {
   }
 
   /**
+   * Queue-bypass handler for /login & /logout. These re-authenticate the
+   * host-side `claude` CLI and cannot run from Telegram, so we never enqueue
+   * or spawn — we explain and stop. This breaks the "Not logged in → /login →
+   * Not logged in" loop at the source. No trace / history / queue.
+   */
+  private handleLoginImmediate(messageId: string, chatId: string): void {
+    const reply =
+      `🔑 \`/login\` can't run from Telegram — it authenticates the \`claude\` CLI ` +
+      `on the host (${this.config.nodeName}), which needs an interactive login on ` +
+      `that machine. I did NOT forward it to the model (that feedback is what ` +
+      `caused the earlier "Not logged in" loop). If I start replying "Not logged ` +
+      `in", the host CLI auth has expired — re-run \`claude\` login on ${this.config.nodeName}.`
+
+    this.log.info(
+      { event: 'login_command_intercepted', messageId, chatId, bypass: true },
+      '/login intercepted at submit — not forwarded to CLI',
+    )
+
+    void this.deliver(chatId, reply).catch(() => {})
+  }
+
+  /**
+   * Honest system-error text when the host `claude` CLI is unauthenticated.
+   * Explicitly flags that this is NOT a real answer, so the dead-CLI line is
+   * never mistaken for Prime's reply. Shared by both single-brain paths.
+   */
+  private authFailureMessage(): string {
+    return (
+      `⚠️ System error — not a real reply. My \`claude\` CLI on ${this.config.nodeName} ` +
+      `isn't authenticated (its login expired), so I can't actually answer right now. ` +
+      `I'm not saving this to our conversation. Re-auth the CLI on the host to restore me ` +
+      `— \`/login\` from Telegram won't fix it.`
+    )
+  }
+
+  /**
    * Map a classification kind + current config state into the OrchestratorKind
    * used by phase-labels.ts. Dual-brain natural messages use 'natural'; the
    * single-brain fallback for a natural message (killswitch or orchestrator
@@ -746,6 +839,44 @@ export class MessageProcessor {
     if (classificationKind === 'clinical') return 'clinical'
     // classificationKind === 'natural' on the single-brain path → dual-brain disabled
     return 'killswitch'
+  }
+
+  /**
+   * Spawn Claude via the streaming path, retrying ONCE on a transient auth
+   * failure. Argus idles overnight, so the OAuth access token is cold at first
+   * light; the first morning spawn can take a 401 ("Failed to authenticate.
+   * API Error: 401 …") and exit 1 in ~2-5s before any inference, then heal
+   * once a refresh lands. Without this, that 401 was relayed to Telegram as a
+   * "successful" answer (the isAuthFailureOutput pattern didn't match the new
+   * wording) and Tripp saw Argus "reset" every morning. The retry lands on a
+   * now-warm token and succeeds; only a persistent failure falls through to
+   * the caller's isAuthFailureOutput handling. See 2026-06-29 investigation.
+   */
+  private async spawnStreamWithAuthRetry(
+    prompt: string,
+    opts: Parameters<typeof spawnClaudeStream>[1],
+  ): Promise<SpawnResult> {
+    let result = await spawnClaudeStream(prompt, opts)
+    if (isAuthFailureOutput(result)) {
+      this.log.warn(
+        { exitCode: result.exitCode, event: 'auth_failure_retry' },
+        'Claude auth failure on first spawn — re-spawning once after backoff (transient cold-token 401)',
+      )
+      await new Promise((resolve) => setTimeout(resolve, 2500))
+      result = await spawnClaudeStream(prompt, opts)
+      this.log.info(
+        {
+          event: isAuthFailureOutput(result)
+            ? 'auth_failure_retry_exhausted'
+            : 'auth_failure_retry_recovered',
+          exitCode: result.exitCode,
+        },
+        isAuthFailureOutput(result)
+          ? 'Claude auth failure persisted after retry — surfacing honest error'
+          : 'Claude auth recovered on retry',
+      )
+    }
+    return result
   }
 
   private async processSingleBrain(
@@ -846,7 +977,7 @@ export class MessageProcessor {
       let lastProgressPostedAt = 0
       let lastProgressPostedStatus: string | null = null
       const LEGACY_PROGRESS_INTERVAL_MS = 60_000
-      const result = await spawnClaudeStream(prompt, {
+      const result = await this.spawnStreamWithAuthRetry(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
         workingDir: this.config.workingDir,
@@ -928,6 +1059,19 @@ export class MessageProcessor {
         this.log.warn({ exitCode: result.exitCode, event: 'rate_limit_detected' }, 'Claude CLI rate-limited')
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
         this.emitProcessEnd(msg.id, processStart, 'single_brain', 'rate_limited', 'legacy', errorMsg)
+        return errorMsg
+      }
+
+      if (isAuthFailureOutput(result)) {
+        const errorMsg = this.authFailureMessage()
+        this.log.error(
+          { exitCode: result.exitCode, event: 'auth_failure_detected' },
+          'Claude CLI not authenticated — surfacing as system error, NOT appending to history',
+        )
+        // Deliberately NOT appended to history — a dead-CLI line is not a real
+        // turn and would poison context for every later message.
+        await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'auth_failed', 'legacy', errorMsg)
         return errorMsg
       }
 
@@ -1021,7 +1165,7 @@ export class MessageProcessor {
       // Each tool_use event maps to a status line via formatStreamEvent;
       // updatePhase is debounced inside the responder so Telegram's edit
       // limit isn't an issue.
-      const result = await spawnClaudeStream(prompt, {
+      const result = await this.spawnStreamWithAuthRetry(prompt, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
         workingDir: this.config.workingDir,
@@ -1090,6 +1234,18 @@ export class MessageProcessor {
         this.log.warn({ exitCode: result.exitCode, event: 'rate_limit_detected' }, 'Claude CLI rate-limited')
         await responder.finalize(msg.chatId, ackMessageId, errorMsg)
         this.emitProcessEnd(msg.id, processStart, 'single_brain', 'rate_limited', 'evolving', errorMsg)
+        return errorMsg
+      }
+
+      if (isAuthFailureOutput(result)) {
+        const errorMsg = this.authFailureMessage()
+        this.log.error(
+          { exitCode: result.exitCode, event: 'auth_failure_detected' },
+          'Claude CLI not authenticated — surfacing as system error, NOT appending to history',
+        )
+        // Deliberately NOT appended to history (see legacy path).
+        await responder.finalize(msg.chatId, ackMessageId, errorMsg)
+        this.emitProcessEnd(msg.id, processStart, 'single_brain', 'auth_failed', 'evolving', errorMsg)
         return errorMsg
       }
 
@@ -1829,7 +1985,7 @@ export class MessageProcessor {
     messageId: string,
     processStart: number,
     path: 'single_brain' | 'dual_brain',
-    outcome: 'success' | 'error' | 'timeout' | 'rate_limited',
+    outcome: 'success' | 'error' | 'timeout' | 'rate_limited' | 'auth_failed',
     uxPath: 'evolving' | 'legacy',
     output?: string,
   ): void {

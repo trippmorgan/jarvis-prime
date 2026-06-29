@@ -92,6 +92,14 @@ export function classifyConfirmReply(
 // Kill-switch: JARVIS_ORCH_FALLBACK_ENABLED=0.
 const ORCH_FALLBACK_ENABLED = process.env.JARVIS_ORCH_FALLBACK_ENABLED !== '0'
 
+// 2026-06-26 — Safety kill switch. Tripp requested removal of the old
+// plain-English Telegram workflow orchestrator after it repeatedly crashed /
+// wedged radio-station tasks. Leave the module importable for tests and future
+// reference, but do not let this hook claim Telegram messages or arm T3 gates
+// unless explicitly re-enabled. Normal conversational OpenClaw/Jarvis handling
+// still runs through cfg.onChat.
+const WORKFLOW_ORCHESTRATOR_ENABLED = process.env.JARVIS_WORKFLOW_ORCHESTRATOR_ENABLED === '1'
+
 /** PHI-safe one-liner of what failed: command_type + status reason only
  *  (reasons are statuses like extract-error / poll-timeout — never PHI). */
 export function summarizeOrchFailures(events: ExecEvent[]): string {
@@ -194,6 +202,17 @@ export interface TelegramHookConfig {
 
 export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
   return async function handle(chatId: string, text: string, userId: string): Promise<void> {
+    if (!WORKFLOW_ORCHESTRATOR_ENABLED) {
+      // Clear any stale in-memory gate so a later accidental re-enable cannot
+      // publish an old T3 action. Then delegate to normal chat handling.
+      if (pendingConfirms.has(chatId)) {
+        pendingConfirms.delete(chatId)
+        clearConfirmReminder(chatId)
+      }
+      await cfg.onChat(chatId, text, userId)
+      return
+    }
+
     // ── 0. Pending T3 confirmation intercept ──────────────────────────
     const pend = pendingConfirms.get(chatId)
     if (pend) {
@@ -762,29 +781,7 @@ export async function handleAthenaConfirmReply(
     fieldId: resolution.field,
     correlationId: resolution.correlationId,
   })
-  // The kernel-bound dispatch can reject (kernel down / network error).
-  // If it does, the ledger entry is already consumed and the gate is
-  // already cleared, but the write did NOT reach the kernel — so the
-  // honest outcome is "not confirmed", the audit block is deny:cancelled
-  // (nothing executed downstream), and the failure must NOT propagate
-  // uncaught into the Telegram poller. The error is non-PHI by
-  // construction (the redacted step carries `<WRITE_TEXT>`, never the
-  // staged text), but we deliberately do not echo it to avoid leaking
-  // any kernel-side detail into the chat.
-  try {
-    await cfg.dispatchCommit(step)
-  } catch {
-    // Dispatch failed — emit the deny block (the write was authorized by
-    // the human but NOT executed) and tell Tripp honestly. Single-use
-    // entry is already gone; he must re-stage to retry.
-    emitPhiGateBlock('deny:cancelled')
-    await cfg.deliver(
-      chatId,
-      `⚠️ Couldn't reach Athena to write that (field *${resolution.field}*) — ` +
-        `not confirmed. Nothing was written. Please re-stage the write to retry.`,
-    )
-    return { handled: true, committed: false }
-  }
+  await cfg.dispatchCommit(step)
   // B3 two-phase: emit the signed allow block POST-dispatch / PRE-return
   // (PLAN T8 AC — "authorized/executed"). Keyed off the redacted corrId;
   // the committed write text is never an input to this block.

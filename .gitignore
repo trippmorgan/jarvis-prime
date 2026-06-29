@@ -1,8 +1,14 @@
 node_modules/
 dist/
 .env
+# .env backups hold live OAuth/bot/gateway tokens — NEVER commit them (.env.example is tracked & safe)
+.env.bak*
+.env.guard-bak*
 .data/
 *.log
+logs/
+# editor/agent scratch backups (e.g. processor.ts.bak-coldtoken-20260629)
+*.bak-*
 .tmp/
 coverage/
 .DS_Store

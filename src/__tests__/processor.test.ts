@@ -67,6 +67,7 @@ function makeProcessor(opts: {
   reporter?: Reporter
   shortMessageFastLaneEnabled?: boolean
   shortMessageMaxChars?: number
+  defaultMode?: 'single' | 'dual'
 }) {
   const tmpDir = mkdtempSync(join(tmpdir(), 'jp-test-'))
   const historyPath = opts.historyPath ?? join(tmpDir, 'history.jsonl')
@@ -77,7 +78,7 @@ function makeProcessor(opts: {
       claudePath: '/usr/bin/claude',
       claudeModel: 'sonnet',
       claudeTimeoutMs: 120_000,
-      workingDir: '/tmp',
+      workingDir: tmpDir,
       nodeName: 'Jarvis Prime',
       botUsername: 'trippassistant_bot',
       historyPath,
@@ -102,7 +103,7 @@ function makeProcessor(opts: {
       // 2026-04-23 — /deep gates dual-brain behind opt-in mode. Production
       // starts in 'single'; tests stay in 'dual' to keep exercising the
       // orchestrator path without per-test toggling.
-      defaultMode: 'dual',
+      defaultMode: opts.defaultMode ?? 'dual',
     },
     deliverMock,
     log,
@@ -621,6 +622,7 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       orchestrator,
       tier0Enabled: true,
       tier0Classifier: makeTestTier0(), shortMessageFastLaneEnabled: false,
+      defaultMode: 'single',
     })
 
     processor.submit('123', 'alpha three quick hello', 'user1')
@@ -679,7 +681,8 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       trace: MOCK_TRACE,
     } satisfies BrainResult)
 
-    // Classifier would route 'alpha' to quick_q, but tier0Enabled omitted.
+    // In explicit dual mode, even an injected classifier that would route
+    // 'alpha' to quick_q is suppressed. /deep means both brains.
     const { processor, deliverMock } = makeProcessor({
       corpusCallosumEnabled: true,
       orchestrator,
@@ -690,13 +693,8 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
     processor.submit('123', 'alpha three quick hello', 'user1')
     await waitFor(() => deliverMock.mock.calls.length > 0)
 
-    // With no tier0Enabled flag AND no injected classifier forced in, the
-    // processor constructs none — but we DID inject one above. The injection
-    // bypasses the flag, so this test actually confirms injection also works.
-    // When a classifier is explicitly injected, it runs regardless of the flag
-    // (tests need predictable behaviour).
-    expect(spawnClaude).toHaveBeenCalledTimes(1)
-    expect(orchestrator).not.toHaveBeenCalled()
+    expect(orchestrator).toHaveBeenCalledTimes(1)
+    expect(spawnClaude).not.toHaveBeenCalled()
   })
 
   it('slash commands bypass tier-0 entirely', async () => {
@@ -770,6 +768,7 @@ describe('MessageProcessor — short-message fast lane (Wave 8.7.1)', () => {
       tier0Enabled: true,
       tier0Classifier: fakeTier0,
       shortMessageFastLaneEnabled: true,
+      defaultMode: 'single',
     })
 
     processor.submit('chat-sm', 'ok sounds good', 'user-sm')

@@ -45,6 +45,8 @@ Known project slugs (resolve to canonical STATE.md paths):
 | `frank-v3` (alias: `frank`) | `frank-v3/.planning/STATE.md` |
 | `kitchen-hub` (alias: `kitchen`) | `kitchen-hub/.planning/STATE.md` |
 | `portfolio-surface` | `jarvis-os/.planning/portfolio-surface/STATE.md` |
+| `research` (alias: `frank-research`) | `research/.planning/STATE.md` |
+| `clinical` (aliases: `clinical-research`, `np`) | `clinical-data/.planning/STATE.md` |
 
 Unknown slug → skill exits 1 with the resolver's known-slugs list.
 
@@ -103,7 +105,8 @@ ok — upserted jarvis-prime (source=human-note)
 [T1 WRITE] /note xyz
 ERROR: unknown project slug 'xyz'.
 Known slugs: jarvis-prime, jarvis-os, hippocampus, pretoria-fields (station/pretoria),
-             frank-v3 (frank), kitchen-hub (kitchen), portfolio-surface
+             frank-v3 (frank), kitchen-hub (kitchen), portfolio-surface,
+             research (frank-research), clinical (clinical-research/np)
 Or pass an absolute path to a STATE.md.
 ```
 

@@ -31,7 +31,9 @@ Known slugs:
   pretoria-fields (aliases: station, pretoria),
   frank-v3 (alias: frank),
   kitchen-hub (alias: kitchen),
-  portfolio-surface
+  portfolio-surface,
+  research (alias: frank-research),
+  clinical (aliases: clinical-research, np)
 EOF
 }
 
@@ -145,6 +147,10 @@ resolve_state_md() {
       echo "$WORKSPACE_ROOT/kitchen-hub/.planning/STATE.md" ;;
     portfolio-surface)
       echo "$WORKSPACE_ROOT/jarvis-os/.planning/portfolio-surface/STATE.md" ;;
+    research|frank-research)
+      echo "$WORKSPACE_ROOT/research/.planning/STATE.md" ;;
+    clinical|clinical-research|np)
+      echo "$WORKSPACE_ROOT/clinical-data/.planning/STATE.md" ;;
     *)
       return 1 ;;
   esac
