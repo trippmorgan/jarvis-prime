@@ -3,26 +3,37 @@ import { join } from 'node:path'
 import type { ConversationHistory } from './history.js'
 import { recallMemory } from './memory-recall.js'
 
-const SKILLS_DIR = '/home/tripp/.claude/skills'
-const RULES_DIR = '/home/tripp/.claude/rules'
+const DEFAULT_SKILLS_DIR = '/home/tripp/.claude/skills'
 
 export interface PromptBuilderConfig {
   /** Display name of this node (e.g. "Jarvis Prime", "Argus", "DJ Jarvis"). */
   nodeName?: string
   /** Telegram bot username this node serves (without @). */
   botUsername?: string
+  /** Override the skills directory (used by tests; defaults to ~/.claude/skills). */
+  skillsDir?: string
 }
 
+interface SkillEntry {
+  command: string
+  description: string
+  body: string
+}
+
+const SKILL_BODY_MAX_CHARS = 1500
+
 export class PromptBuilder {
-  private skillSummary: string = ''
+  private skills: SkillEntry[] = []
   private readonly history: ConversationHistory
   private readonly nodeName: string
   private readonly botUsername: string
+  private readonly skillsDir: string
 
   constructor(history: ConversationHistory, config: PromptBuilderConfig = {}) {
     this.history = history
     this.nodeName = config.nodeName ?? 'Jarvis Prime'
     this.botUsername = config.botUsername ?? 'trippassistant_bot'
+    this.skillsDir = config.skillsDir ?? DEFAULT_SKILLS_DIR
     this.loadSkills()
   }
 
@@ -30,6 +41,10 @@ export class PromptBuilder {
     const parts: string[] = []
 
     parts.push(this.getSystemContext())
+
+    const triggered = this.detectTriggeredCommands(userMessage)
+    const skillBlock = this.renderSkillBlock(triggered)
+    if (skillBlock) parts.push(skillBlock)
 
     // Memory check — consult jarvis-OS shared memory + active projects so Prime
     // (single AND dual brain, which both build through here) reuses existing
@@ -50,53 +65,79 @@ export class PromptBuilder {
     return `## Context
 You are ${this.nodeName}, responding to Tripp via Telegram (@${this.botUsername}).
 Keep responses concise — this is Telegram, not a terminal. Aim for 1-3 short paragraphs max unless the task demands more.
-You have full SSH access to the Jarvis network. Execute commands directly when asked — don't just describe what you would do.
-
-${this.skillSummary}`
+You have full SSH access to the Jarvis network. Execute commands directly when asked — don't just describe what you would do.`
   }
 
   private loadSkills(): void {
-    if (!existsSync(SKILLS_DIR)) {
-      this.skillSummary = ''
-      return
-    }
+    if (!existsSync(this.skillsDir)) return
 
-    const files = readdirSync(SKILLS_DIR).filter(f => f.endsWith('.md'))
-    if (files.length === 0) {
-      this.skillSummary = ''
-      return
-    }
+    const files = readdirSync(this.skillsDir).filter(f => f.endsWith('.md'))
+    if (files.length === 0) return
 
-    const skills: string[] = ['## Available skills']
-    skills.push('When Tripp sends a message starting with /, match it to a skill below and follow its instructions.')
-    skills.push('These are NOT Claude Code slash commands — they are Jarvis skills. Execute them by running the bash commands described in each skill.')
-    skills.push('You can also trigger skills proactively when the request matches (e.g. "check the network" → /network-status).\n')
-
+    const entries: SkillEntry[] = []
     for (const file of files) {
       try {
-        const content = readFileSync(join(SKILLS_DIR, file), 'utf-8')
+        const content = readFileSync(join(this.skillsDir, file), 'utf-8')
         const nameMatch = content.match(/^command:\s*(.+)$/m)
         const descMatch = content.match(/^description:\s*(.+)$/m)
         const command = nameMatch?.[1] ?? `/${file.replace('.md', '')}`
-        const desc = descMatch?.[1] ?? ''
+        const description = descMatch?.[1] ?? ''
 
-        // Extract the instructions (everything after the frontmatter)
         const bodyStart = content.indexOf('---', content.indexOf('---') + 3)
         const body = bodyStart > 0 ? content.slice(bodyStart + 3).trim() : ''
 
-        skills.push(`### ${command}`)
-        if (desc) skills.push(desc)
-        if (body) {
-          // Truncate skill body to keep prompt reasonable
-          const truncated = body.length > 1500 ? body.slice(0, 1500) + '\n...(truncated)' : body
-          skills.push(truncated)
-        }
-        skills.push('')
+        entries.push({ command, description, body })
       } catch {
         // skip unreadable files
       }
     }
 
-    this.skillSummary = skills.join('\n')
+    this.skills = entries
   }
+
+  // Match `/<command>` as a whole token — must NOT match a path like
+  // `/usr/bin/network-status`. Case-insensitive per SPEC Q2.
+  private detectTriggeredCommands(userMessage: string): Set<string> {
+    const triggered = new Set<string>()
+    if (!userMessage) return triggered
+    const msg = userMessage.toLowerCase()
+    for (const skill of this.skills) {
+      const cmd = skill.command.toLowerCase()
+      if (!cmd.startsWith('/')) continue
+      const re = new RegExp(`(^|\\s)${escapeRegExp(cmd)}(?![\\w:-])`, 'i')
+      if (re.test(msg)) triggered.add(skill.command)
+    }
+    return triggered
+  }
+
+  private renderSkillBlock(triggered: Set<string>): string {
+    if (this.skills.length === 0) return ''
+
+    const lines: string[] = []
+    lines.push('## Available skills')
+    lines.push('When Tripp sends a message starting with /, match it to a skill below. The full instructions for a skill appear when that skill is invoked; otherwise only its one-line summary is shown here. Trigger a skill by typing `/<command>` (case-insensitive).')
+    lines.push('These are NOT Claude Code slash commands — execute them by running the bash commands described in each skill.')
+    lines.push('You can still propose a skill proactively when the request matches (e.g. "check the network" → /network-status); ask Tripp to confirm with the slash command if it would help.')
+    lines.push('')
+
+    for (const skill of this.skills) {
+      const header = skill.description
+        ? `### ${skill.command} — ${skill.description}`
+        : `### ${skill.command}`
+      lines.push(header)
+      if (triggered.has(skill.command) && skill.body) {
+        const truncated = skill.body.length > SKILL_BODY_MAX_CHARS
+          ? skill.body.slice(0, SKILL_BODY_MAX_CHARS) + '\n...(truncated)'
+          : skill.body
+        lines.push(truncated)
+      }
+      lines.push('')
+    }
+
+    return lines.join('\n').trimEnd()
+  }
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
