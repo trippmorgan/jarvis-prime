@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { loadConfig } from '../config.js'
+import { loadConfig, assertLeftRuntimeConfig } from '../config.js'
 
 /**
  * loadConfig() parses process.env through a Zod schema. Tests manipulate
@@ -25,6 +25,12 @@ const KEYS = [
   'RIGHT_BRAIN_AGENT_ENABLED',
   'RIGHT_BRAIN_AGENT_FALLBACK',
   'JARVIS_ROUTER_ENABLED',
+  'USE_CLAUDE_LEFT',
+  'LEFT_MODEL',
+  'LEFT_OLLAMA_URL',
+  'LEFT_API_KEY',
+  'LEFT_TOOLS',
+  'LEFT_FALLBACK_MODELS',
 ] as const
 
 let savedEnv: Record<string, string | undefined>
@@ -246,6 +252,68 @@ describe('loadConfig JARVIS_ROUTER_ENABLED (W8-T2)', () => {
     process.env.JARVIS_ROUTER_ENABLED = 'false'
     const cfg = loadConfig()
     expect(cfg.JARVIS_ROUTER_ENABLED).toBe(false)
+  })
+})
+
+describe('loadConfig left-runtime keys (Argus GLM dual-brain)', () => {
+  it('defaults: USE_CLAUDE_LEFT false, LEFT_MODEL "glm-5.2", LEFT_TOOLS true, LEFT_FALLBACK_MODELS "fable,sonnet"', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    const cfg = loadConfig()
+    expect(cfg.USE_CLAUDE_LEFT).toBe(false)
+    expect(cfg.LEFT_MODEL).toBe('glm-5.2')
+    expect(cfg.LEFT_OLLAMA_URL).toBe('https://ollama.com/v1/chat/completions')
+    expect(cfg.LEFT_API_KEY).toBe('')
+    expect(cfg.LEFT_TOOLS).toBe(true)
+    expect(cfg.LEFT_FALLBACK_MODELS).toBe('fable,sonnet')
+  })
+
+  it('reads LEFT_MODEL override from env', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.LEFT_MODEL = 'x'
+    const cfg = loadConfig()
+    expect(cfg.LEFT_MODEL).toBe('x')
+  })
+
+  it('parses USE_CLAUDE_LEFT=true as true', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    process.env.USE_CLAUDE_LEFT = 'true'
+    const cfg = loadConfig()
+    expect(cfg.USE_CLAUDE_LEFT).toBe(true)
+  })
+})
+
+describe('assertLeftRuntimeConfig (boot-time guard, not part of parsing)', () => {
+  const baseCfg = () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    return loadConfig()
+  }
+
+  it('throws on remote LEFT_OLLAMA_URL + USE_CLAUDE_LEFT=false + empty LEFT_API_KEY', () => {
+    const cfg = baseCfg() // defaults: remote URL, USE_CLAUDE_LEFT=false, empty key
+    expect(() => assertLeftRuntimeConfig(cfg)).toThrow(/LEFT_API_KEY is empty/)
+  })
+
+  it('passes when LEFT_API_KEY is set', () => {
+    process.env.LEFT_API_KEY = 'ollama-cloud-key'
+    const cfg = baseCfg()
+    expect(() => assertLeftRuntimeConfig(cfg)).not.toThrow()
+  })
+
+  it('passes when USE_CLAUDE_LEFT=true even with empty key', () => {
+    process.env.USE_CLAUDE_LEFT = 'true'
+    const cfg = baseCfg()
+    expect(() => assertLeftRuntimeConfig(cfg)).not.toThrow()
+  })
+
+  it('passes with a local http://127.0.0.1 URL and empty key', () => {
+    process.env.LEFT_OLLAMA_URL = 'http://127.0.0.1:11434/v1/chat/completions'
+    const cfg = baseCfg()
+    expect(() => assertLeftRuntimeConfig(cfg)).not.toThrow()
+  })
+
+  it('loadConfig alone does NOT throw for the default (remote+no-key) combo — guard is boot-only', () => {
+    process.env.CORPUS_CALLOSUM_ENABLED = 'false'
+    expect(() => loadConfig()).not.toThrow()
   })
 })
 

@@ -3,6 +3,9 @@ import { dirname, join } from 'node:path'
 
 export type Mode = 'single' | 'dual'
 
+// 'openclaw' = native direct-Ollama GLM left runtime; 'claude' = Anthropic Claude CLI left.
+export type LeftRuntime = 'openclaw' | 'claude'
+
 interface PersistedState {
   mode: Mode
   updatedAt: string
@@ -11,14 +14,27 @@ interface PersistedState {
 export class ModeState {
   private mode: Mode
   private readonly persistPath: string | null
+  // In-memory only — deliberately NOT persisted (predictable boot: you should
+  // never wake up surprised which left runtime is active).
+  private leftRuntime: LeftRuntime
 
-  constructor(initial: Mode = 'single', persistPath?: string) {
+  constructor(initial: Mode = 'single', persistPath?: string, leftRuntime: LeftRuntime = 'openclaw') {
     this.persistPath = persistPath ?? null
     this.mode = this.restore() ?? initial
+    this.leftRuntime = leftRuntime
   }
 
   get current(): Mode {
     return this.mode
+  }
+
+  get currentLeftRuntime(): LeftRuntime {
+    return this.leftRuntime
+  }
+
+  setLeftRuntime(runtime: LeftRuntime): LeftRuntime {
+    this.leftRuntime = runtime
+    return this.leftRuntime
   }
 
   toggle(): Mode {

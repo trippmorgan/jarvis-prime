@@ -216,6 +216,72 @@ describe("RightHemisphereClient", () => {
     ).rejects.toMatchObject({ message: expect.stringContaining("malformed response") })
   })
 
+  it("falls back to message.reasoning when content is an empty string (GLM)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: "assistant", content: "", reasoning: "actual answer" } }],
+        }),
+        text: async () => "",
+      }),
+    )
+
+    const client = makeClient()
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 5_000 })
+    expect(result.content).toBe("actual answer")
+  })
+
+  it("throws RightHemisphereError when both content and reasoning are empty/missing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: "assistant", content: "", reasoning: "" } }],
+        }),
+        text: async () => "",
+      }),
+    )
+
+    const client = makeClient()
+    await expect(
+      client.call({ system: "s", user: "u", timeoutMs: 5_000 }),
+    ).rejects.toMatchObject({
+      name: "RightHemisphereError",
+      message: expect.stringContaining("malformed response"),
+    })
+  })
+
+  it("prefers content over reasoning when both are present", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "the real answer",
+                reasoning: "internal chain of thought",
+              },
+            },
+          ],
+        }),
+        text: async () => "",
+      }),
+    )
+
+    const client = makeClient()
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 5_000 })
+    expect(result.content).toBe("the real answer")
+  })
+
   it("times out via AbortController after timeoutMs", async () => {
     vi.useFakeTimers()
 

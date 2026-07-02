@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { ModeState } from '../bridge/mode-state.js'
+import { ModeState, type LeftRuntime } from '../bridge/mode-state.js'
 import { matchDeepCommand } from '../bridge/processor.js'
 
 describe('ModeState', () => {
@@ -59,6 +59,47 @@ describe('ModeState persistence', () => {
     writeFileSync(statePath, 'not json')
     const s = new ModeState('single', statePath)
     expect(s.current).toBe('single')
+  })
+})
+
+describe('ModeState left runtime', () => {
+  let tmp: string
+  let statePath: string
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'mode-state-'))
+    statePath = join(tmp, '.data', 'mode-state.json')
+  })
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true })
+  })
+
+  it('defaults to openclaw', () => {
+    expect(new ModeState().currentLeftRuntime).toBe('openclaw')
+  })
+
+  it('constructor accepts claude as left runtime', () => {
+    const s = new ModeState('single', undefined, 'claude')
+    expect(s.currentLeftRuntime).toBe('claude')
+  })
+
+  it('setLeftRuntime returns and sets the new runtime', () => {
+    const s = new ModeState()
+    const result: LeftRuntime = s.setLeftRuntime('claude')
+    expect(result).toBe('claude')
+    expect(s.currentLeftRuntime).toBe('claude')
+  })
+
+  it('leftRuntime is NOT persisted — mode restores, runtime resets to default', () => {
+    const s1 = new ModeState('single', statePath)
+    s1.toggle() // → dual, persisted
+    s1.setLeftRuntime('claude')
+    expect(s1.currentLeftRuntime).toBe('claude')
+
+    const s2 = new ModeState('single', statePath)
+    expect(s2.current).toBe('dual') // mode restored from disk
+    expect(s2.currentLeftRuntime).toBe('openclaw') // runtime deliberately in-memory only
   })
 })
 

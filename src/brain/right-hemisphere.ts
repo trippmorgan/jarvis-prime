@@ -29,6 +29,7 @@ interface ChatCompletionResponse {
     message?: {
       role?: string
       content?: string
+      reasoning?: string
     }
   }>
   usage?: {
@@ -150,13 +151,24 @@ export class RightHemisphereClient implements HemisphereClient {
       throw new RightHemisphereError("malformed response: invalid JSON", err)
     }
 
-    const content = parsed?.choices?.[0]?.message?.content
+    const message = parsed?.choices?.[0]?.message
+    // Ollama Cloud GLM models may return useful text in message.reasoning with
+    // message.content set to an empty string. Treat reasoning as valid right-
+    // hemisphere output so the deliberation isn't lost.
+    const content =
+      typeof message?.content === "string" && message.content.trim()
+        ? message.content
+        : typeof message?.reasoning === "string" && message.reasoning.trim()
+          ? message.reasoning
+          : undefined
     if (typeof content !== "string") {
       this.log?.error(
         { event: "right_hemisphere_malformed", durationMs },
-        "right hemisphere response missing choices[0].message.content",
+        "right hemisphere response missing choices[0].message.content/reasoning",
       )
-      throw new RightHemisphereError("malformed response: missing choices[0].message.content")
+      throw new RightHemisphereError(
+        "malformed response: missing choices[0].message.content/reasoning",
+      )
     }
 
     this.log?.info(

@@ -77,6 +77,24 @@ const baseSchema = z.object({
   // 80 chars. Set JARVIS_SHORT_MSG_FAST_LANE=false to disable.
   JARVIS_SHORT_MSG_FAST_LANE: boolFromEnv(true),
   JARVIS_SHORT_MSG_MAX_CHARS: z.coerce.number().default(80),
+  // Left-brain runtime selector. Default false = native GLM left (direct
+  // Ollama Cloud chat-completions with run_bash tool loop). Set true to
+  // default-boot the Anthropic Claude CLI left. /deep claude and
+  // /deep openclaw flip mid-session.
+  USE_CLAUDE_LEFT: boolFromEnv(false),
+  LEFT_MODEL: z.string().default("glm-5.2"),
+  LEFT_OLLAMA_URL: z.string().default("https://ollama.com/v1/chat/completions"),
+  // Ollama Cloud API key for the native left runtime. REQUIRED when
+  // LEFT_OLLAMA_URL is remote. Deliberately separate from
+  // OPENCLAW_GATEWAY_TOKEN (that is the LOCAL gateway token and must never
+  // be sent to ollama.com).
+  LEFT_API_KEY: z.string().default(""),
+  // Give the native left a run_bash agent loop (default). false =
+  // narrate-only plain chat.
+  LEFT_TOOLS: boolFromEnv(true),
+  // Comma-separated Claude CLI model aliases tried in order when the native
+  // GLM left fails (auto-fallback chain: Fable 5 then Sonnet 5).
+  LEFT_FALLBACK_MODELS: z.string().default("fable,sonnet"),
   LANGFUSE_ENABLED: boolFromEnv(false),
   LANGFUSE_HOST: z.string().default(""),
   LANGFUSE_PUBLIC_KEY: z.string().default(""),
@@ -114,4 +132,23 @@ export type Config = z.infer<typeof configSchema>;
 
 export function loadConfig(): Config {
   return configSchema.parse(process.env);
+}
+
+/**
+ * Boot-time guard for the native GLM left runtime. Deliberately NOT part of
+ * schema parsing: unit tests construct configs without LEFT_* vars (which
+ * lands on the remote default + empty key) and must still parse. The server
+ * entrypoint (src/server.ts) calls this before booting so a real process
+ * never talks to a remote Ollama endpoint without its own key.
+ */
+export function assertLeftRuntimeConfig(config: Config): void {
+  if (
+    config.LEFT_OLLAMA_URL.startsWith("https://") &&
+    !config.USE_CLAUDE_LEFT &&
+    config.LEFT_API_KEY.trim() === ""
+  ) {
+    throw new Error(
+      "LEFT_OLLAMA_URL is remote but LEFT_API_KEY is empty — refusing to boot the native left runtime without its own key (never reuse OPENCLAW_GATEWAY_TOKEN).",
+    );
+  }
 }
