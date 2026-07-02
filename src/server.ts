@@ -88,6 +88,7 @@ export async function buildServer(config: Config): Promise<ServerContext> {
       rightModel: config.OPENCLAW_CHAT_MODEL_RIGHT,
       corpusCallosumTimeoutMs: config.CORPUS_CALLOSUM_TIMEOUT_MS,
       leftHemisphereFastTimeoutMs: config.LEFT_HEMISPHERE_FAST_TIMEOUT_MS,
+      leftFallbackModels: config.LEFT_FALLBACK_MODELS.split(',').map((s) => s.trim()).filter(Boolean),
       clinicalOverride: config.CORPUS_CLINICAL_OVERRIDE,
       evolvingMessageEnabled: config.JARVIS_EVOLVING_MESSAGE_ENABLED,
       rightBrainAgentEnabled: config.RIGHT_BRAIN_AGENT_ENABLED,

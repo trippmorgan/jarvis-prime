@@ -220,6 +220,8 @@ export interface ProcessorConfig {
    *  Replaces corpusCallosumTimeoutMs as the live knob; the older one is
    *  retained for back-compat reads but no longer plumbed into the spawn. */
   leftHemisphereFastTimeoutMs?: number
+  /** W3-T8 — Claude CLI models tried in order when the native GLM left fails. */
+  leftFallbackModels?: string[]
   /** When true, force clinical bypass for all messages (explicit caller override). */
   clinicalOverride?: boolean
   /**
@@ -362,6 +364,8 @@ export class MessageProcessor {
         model: config.claudeModel,
         workingDir: config.workingDir,
         logger: this.log,
+        // W3-T8 — GLM → Claude fallback chain models (LEFT_FALLBACK_MODELS).
+        fallbackModels: config.leftFallbackModels,
         // Pick the spawner per-call from current mode state so /deep claude
         // and /deep openclaw take effect mid-session without rebuilding the
         // hemisphere client.

@@ -143,9 +143,12 @@ describe("LeftHemisphereClient", () => {
       timedOut: true,
     });
     const logger = makeLogger();
+    // Manual 'claude' runtime — the no-chain path (W3-T8: default 'openclaw'
+    // runtime now falls back through Claude models instead of throwing here).
     const { client } = buildClient({
       spawner: spawner as unknown as Spawner,
       logger,
+      runtimeResolver: () => "claude",
     });
 
     await expect(
@@ -171,6 +174,7 @@ describe("LeftHemisphereClient", () => {
     const { client } = buildClient({
       spawner: spawner as unknown as Spawner,
       logger,
+      runtimeResolver: () => "claude",
     });
 
     await expect(
@@ -198,7 +202,10 @@ describe("LeftHemisphereClient", () => {
       durationMs: 10,
       timedOut: false,
     });
-    const { client } = buildClient({ spawner: spawner as unknown as Spawner });
+    const { client } = buildClient({
+      spawner: spawner as unknown as Spawner,
+      runtimeResolver: () => "claude",
+    });
 
     const err = (await client
       .call({ system: "s", user: "u", timeoutMs: 1000 })
@@ -433,5 +440,204 @@ describe("LeftHemisphereClient runtime resolver", () => {
     expect(streamed.content).toBe("from-claude-stream");
     expect(resolver).toHaveBeenCalled();
     expect(spawnClaudeStream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("LeftHemisphereClient GLM fallback chain (W3-T8)", () => {
+  const failResult: SpawnResult = {
+    output: "",
+    stderr: "glm boom",
+    exitCode: 1,
+    durationMs: 5,
+    timedOut: false,
+  };
+
+  beforeEach(() => {
+    vi.mocked(spawnClaude).mockReset().mockResolvedValue({ ...okResult, output: "from-claude" });
+    vi.mocked(spawnClaudeStream)
+      .mockReset()
+      .mockResolvedValue({ ...okResult, output: "from-claude-stream" });
+    vi.mocked(spawnOpenclawAgent)
+      .mockReset()
+      .mockResolvedValue({ ...okResult, output: "from-openclaw" });
+    vi.mocked(spawnOpenclawAgentStream)
+      .mockReset()
+      .mockResolvedValue({ ...okResult, output: "from-openclaw-stream" });
+  });
+
+  function chainClient(overrides: Partial<LeftHemisphereConfig> = {}) {
+    const logger = makeLogger();
+    const client = new LeftHemisphereClient({
+      claudePath: "/home/tripp/.local/bin/claude",
+      model: "glm-5.2",
+      workingDir: "/tmp",
+      logger,
+      ...overrides,
+    });
+    return { client, logger };
+  }
+
+  function loggedEvents(mock: ReturnType<typeof vi.fn>): string[] {
+    return mock.mock.calls.map(
+      (args) => (args[0] as { event?: string } | undefined)?.event ?? "",
+    );
+  }
+
+  it("GLM failure (exitCode 1) falls back to claude model 'fable' and returns its result", async () => {
+    vi.mocked(spawnOpenclawAgent).mockResolvedValue(failResult);
+    const { client, logger } = chainClient();
+
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+
+    expect(result.content).toBe("from-claude");
+    expect(spawnOpenclawAgent).toHaveBeenCalledTimes(1);
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+    const [, opts] = vi.mocked(spawnClaude).mock.calls[0]!;
+    expect(opts.model).toBe("fable");
+    expect(opts.claudePath).toBe("/home/tripp/.local/bin/claude");
+    expect(opts.workingDir).toBe("/tmp");
+    expect(opts.timeoutMs).toBe(1000);
+
+    expect(loggedEvents(logger.warn)).toContain("left_glm_fallback");
+    expect(loggedEvents(logger.info)).toContain("left_glm_fallback_recovered");
+    const recovered = logger.info.mock.calls.find(
+      (args) => (args[0] as { event?: string }).event === "left_glm_fallback_recovered",
+    );
+    expect((recovered![0] as { model?: string }).model).toBe("fable");
+  });
+
+  it("GLM + fable fail, sonnet succeeds — claude spawner saw ['fable','sonnet'] in order", async () => {
+    vi.mocked(spawnOpenclawAgent).mockResolvedValue(failResult);
+    vi.mocked(spawnClaude)
+      .mockResolvedValueOnce(failResult)
+      .mockResolvedValueOnce({ ...okResult, output: "from-sonnet" });
+    const { client, logger } = chainClient();
+
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+
+    expect(result.content).toBe("from-sonnet");
+    expect(spawnClaude).toHaveBeenCalledTimes(2);
+    const models = vi.mocked(spawnClaude).mock.calls.map(([, opts]) => opts.model);
+    expect(models).toEqual(["fable", "sonnet"]);
+    expect(loggedEvents(logger.warn).filter((e) => e === "left_glm_fallback")).toHaveLength(2);
+    expect(loggedEvents(logger.info)).toContain("left_glm_fallback_recovered");
+  });
+
+  it("GLM + fable + sonnet all fail → LeftHemisphereError naming the chain, exhausted logged", async () => {
+    vi.mocked(spawnOpenclawAgent).mockResolvedValue(failResult);
+    vi.mocked(spawnClaude).mockResolvedValue(failResult);
+    const { client, logger } = chainClient();
+
+    const err = (await client
+      .call({ system: "s", user: "u", timeoutMs: 1000 })
+      .catch((e) => e)) as Error;
+
+    expect(err).toBeInstanceOf(LeftHemisphereError);
+    expect(err.message).toContain("glm-5.2");
+    expect(err.message).toContain("fable");
+    expect(err.message).toContain("sonnet");
+    expect(spawnClaude).toHaveBeenCalledTimes(2); // total attempts = 1 + 2, capped
+    expect(loggedEvents(logger.error)).toContain("left_glm_fallback_exhausted");
+  });
+
+  it("GLM success never touches the claude spawner (hot path unchanged)", async () => {
+    const { client, logger } = chainClient();
+
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+
+    expect(result.content).toBe("from-openclaw");
+    expect(spawnClaude).not.toHaveBeenCalled();
+    expect(spawnClaudeStream).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(loggedEvents(logger.info)).toContain("left_hemisphere_call_success");
+  });
+
+  it("manual 'claude' runtime failure throws immediately — no chain, openclaw spawner never called", async () => {
+    vi.mocked(spawnClaude).mockResolvedValue(failResult);
+    const { client, logger } = chainClient({ runtimeResolver: () => "claude" });
+
+    await expect(
+      client.call({ system: "s", user: "u", timeoutMs: 1000 }),
+    ).rejects.toBeInstanceOf(LeftHemisphereError);
+
+    expect(spawnClaude).toHaveBeenCalledTimes(1); // primary only — never retried
+    expect(spawnOpenclawAgent).not.toHaveBeenCalled();
+    expect(loggedEvents(logger.warn)).not.toContain("left_glm_fallback");
+    expect(loggedEvents(logger.error)).not.toContain("left_glm_fallback_exhausted");
+  });
+
+  it("empty-output GLM result (exitCode 0, output '') counts as failure and chains", async () => {
+    vi.mocked(spawnOpenclawAgent).mockResolvedValue({ ...okResult, output: "   \n" });
+    const { client, logger } = chainClient();
+
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+
+    expect(result.content).toBe("from-claude");
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+    expect(loggedEvents(logger.warn)).toContain("left_glm_fallback");
+  });
+
+  it("a thrown GLM spawner error also chains instead of throwing", async () => {
+    vi.mocked(spawnOpenclawAgent).mockRejectedValue(new Error("ollama cloud unreachable"));
+    const { client } = chainClient();
+
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+
+    expect(result.content).toBe("from-claude");
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects custom fallbackModels ['claude-fable-5']", async () => {
+    vi.mocked(spawnOpenclawAgent).mockResolvedValue(failResult);
+    vi.mocked(spawnClaude).mockResolvedValue(failResult);
+    const { client } = chainClient({ fallbackModels: ["claude-fable-5"] });
+
+    const err = (await client
+      .call({ system: "s", user: "u", timeoutMs: 1000 })
+      .catch((e) => e)) as Error;
+
+    expect(err).toBeInstanceOf(LeftHemisphereError);
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(spawnClaude).mock.calls[0]![1].model).toBe("claude-fable-5");
+    expect(err.message).toContain("claude-fable-5");
+  });
+
+  it("never retries the same model — a fallback matching the primary model is skipped", async () => {
+    vi.mocked(spawnOpenclawAgent).mockResolvedValue(failResult);
+    vi.mocked(spawnClaude).mockResolvedValue(failResult);
+    const { client } = chainClient({
+      model: "sonnet",
+      fallbackModels: ["fable", "sonnet"],
+    });
+
+    await client.call({ system: "s", user: "u", timeoutMs: 1000 }).catch(() => {});
+
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(spawnClaude).mock.calls[0]![1].model).toBe("fable");
+  });
+
+  it("streaming fallback: onStreamEvent flows into spawnClaudeStream on fallback attempts", async () => {
+    vi.mocked(spawnOpenclawAgentStream).mockResolvedValue(failResult);
+    const { client, logger } = chainClient();
+    const onStreamEvent = vi.fn();
+
+    const result = await client.call({
+      system: "s",
+      user: "u",
+      timeoutMs: 1000,
+      onStreamEvent,
+    });
+
+    expect(result.content).toBe("from-claude-stream");
+    expect(spawnOpenclawAgentStream).toHaveBeenCalledTimes(1);
+    expect(spawnClaudeStream).toHaveBeenCalledTimes(1);
+    expect(spawnClaude).not.toHaveBeenCalled();
+    const [, streamOpts] = vi.mocked(spawnClaudeStream).mock.calls[0]! as [
+      string,
+      SpawnOptions & { onEvent?: unknown },
+    ];
+    expect(streamOpts.model).toBe("fable");
+    expect(streamOpts.onEvent).toBe(onStreamEvent);
+    expect(loggedEvents(logger.info)).toContain("left_glm_fallback_recovered");
   });
 });
