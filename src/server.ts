@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import type { Config } from "./config.js";
+import { assertLeftRuntimeConfig, type Config } from "./config.js";
 import { MessageProcessor } from "./bridge/processor.js";
 import { registerMessageRoute } from "./routes/message.js";
 import { TelegramPoller } from "./telegram/poller.js";
@@ -14,6 +14,10 @@ export interface ServerContext {
 }
 
 export async function buildServer(config: Config): Promise<ServerContext> {
+  // Wave-1 boot guard — a remote LEFT_OLLAMA_URL with an empty LEFT_API_KEY
+  // must refuse to boot with a clear error, before anything is constructed.
+  assertLeftRuntimeConfig(config);
+
   const server = Fastify({ logger: true });
 
   // W8.8 — construct the observability reporter first so we can pass it
@@ -95,6 +99,9 @@ export async function buildServer(config: Config): Promise<ServerContext> {
       shortMessageMaxChars: config.JARVIS_SHORT_MSG_MAX_CHARS,
       reporter,
       telegramSurface,
+      // Argus boots dual-brain (GLM left + Codex right); /deep still toggles.
+      defaultMode: 'dual' as const,
+      defaultLeftRuntime: config.USE_CLAUDE_LEFT ? 'claude' as const : 'openclaw' as const,
     },
     deliver,
     server.log,

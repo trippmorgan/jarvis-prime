@@ -68,6 +68,7 @@ function makeProcessor(opts: {
   shortMessageFastLaneEnabled?: boolean
   shortMessageMaxChars?: number
   defaultMode?: 'single' | 'dual'
+  defaultLeftRuntime?: 'openclaw' | 'claude'
 }) {
   const tmpDir = mkdtempSync(join(tmpdir(), 'jp-test-'))
   const historyPath = opts.historyPath ?? join(tmpDir, 'history.jsonl')
@@ -104,6 +105,7 @@ function makeProcessor(opts: {
       // starts in 'single'; tests stay in 'dual' to keep exercising the
       // orchestrator path without per-test toggling.
       defaultMode: opts.defaultMode ?? 'dual',
+      defaultLeftRuntime: opts.defaultLeftRuntime,
     },
     deliverMock,
     log,
@@ -197,6 +199,65 @@ describe('MessageProcessor', () => {
     // Flipping back is also immediate.
     p.submit('123', '/deep', 'user1')
     expect(dMock).toHaveBeenCalledWith('123', expect.stringContaining('Claude solo'))
+  })
+
+  it("'/deep claude' flips the left runtime to claude and confirms with 'Claude'", () => {
+    const { processor: p, deliverMock: dMock } = makeProcessor({ defaultMode: 'single' })
+    expect((p as any).modeState.currentLeftRuntime).toBe('openclaw')
+
+    const receipt = p.submit('123', '/deep claude', 'user1')
+    expect(receipt.position).toBe(0) // queue-bypass, same as /deep
+    expect((p as any).modeState.currentLeftRuntime).toBe('claude')
+    expect(dMock).toHaveBeenCalledWith('123', expect.stringContaining('Claude'))
+  })
+
+  it("'/deep openclaw' flips back and the confirmation names GLM", () => {
+    const { processor: p, deliverMock: dMock } = makeProcessor({
+      defaultMode: 'single',
+      defaultLeftRuntime: 'claude',
+    })
+    expect((p as any).modeState.currentLeftRuntime).toBe('claude')
+
+    p.submit('123', '/deep openclaw', 'user1')
+    expect((p as any).modeState.currentLeftRuntime).toBe('openclaw')
+    expect(dMock).toHaveBeenCalledWith('123', expect.stringContaining('GLM'))
+  })
+
+  it('defaultLeftRuntime claude → boots claude; omitted → openclaw', () => {
+    const { processor: withClaude } = makeProcessor({ defaultLeftRuntime: 'claude' })
+    expect((withClaude as any).modeState.currentLeftRuntime).toBe('claude')
+
+    const { processor: omitted } = makeProcessor({})
+    expect((omitted as any).modeState.currentLeftRuntime).toBe('openclaw')
+  })
+
+  it('/deep status reports the current left runtime + swap hint', () => {
+    const { processor: p, deliverMock: dMock } = makeProcessor({ defaultMode: 'single' })
+    p.submit('123', '/deep status', 'user1')
+
+    expect(dMock).toHaveBeenCalledTimes(1)
+    const reply = dMock.mock.calls[0][1] as string
+    expect(reply).toContain('openclaw')
+    expect(reply).toContain('GLM')
+    expect(reply).toContain('/deep claude or /deep openclaw to swap left runtime')
+    // Runtime flips are reflected in status too.
+    p.submit('123', '/deep claude', 'user1')
+    p.submit('123', '/deep status', 'user1')
+    const statusAfter = dMock.mock.calls[2][1] as string
+    expect(statusAfter).toContain('claude')
+  })
+
+  it('dual-brain toggle reply is runtime-aware (GLM-5.2 + Codex by default)', () => {
+    const { processor: p, deliverMock: dMock } = makeProcessor({ defaultMode: 'single' })
+    p.submit('123', '/deep', 'user1') // single → dual
+    expect(dMock).toHaveBeenCalledWith('123', expect.stringContaining('GLM-5.2 + Codex'))
+
+    const { processor: p2, deliverMock: dMock2 } = makeProcessor({
+      defaultMode: 'single',
+      defaultLeftRuntime: 'claude',
+    })
+    p2.submit('123', '/deep', 'user1')
+    expect(dMock2).toHaveBeenCalledWith('123', expect.stringContaining('Claude + Codex'))
   })
 
   it('reports queue position correctly', () => {

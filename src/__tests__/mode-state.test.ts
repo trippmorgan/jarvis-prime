@@ -115,8 +115,19 @@ describe('matchDeepCommand', () => {
     expect(matchDeepCommand('/Deep Status')).toBe('status')
   })
 
+  it('matches /deep openclaw as left:openclaw', () => {
+    expect(matchDeepCommand('/deep openclaw')).toBe('left:openclaw')
+    expect(matchDeepCommand('/Deep OpenClaw  ')).toBe('left:openclaw')
+  })
+
+  it('matches /deep claude as left:claude', () => {
+    expect(matchDeepCommand('/deep claude')).toBe('left:claude')
+    expect(matchDeepCommand('/DEEP CLAUDE ')).toBe('left:claude')
+  })
+
   it('returns null for non-matches', () => {
     expect(matchDeepCommand('/deep please think hard')).toBe(null)
+    expect(matchDeepCommand('/deep somethingelse')).toBe(null)
     expect(matchDeepCommand('/dispatch something')).toBe(null)
     expect(matchDeepCommand('hey jarvis')).toBe(null)
     expect(matchDeepCommand('')).toBe(null)

@@ -1,9 +1,38 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { LeftHemisphereClient, type LeftHemisphereConfig } from "../brain/left-hemisphere.js";
 import { LeftHemisphereError } from "../brain/types.js";
 import type { SpawnOptions, SpawnResult } from "../claude/types.js";
+import { spawnClaude } from "../claude/spawner.js";
+import { spawnClaudeStream } from "../claude/spawner-stream.js";
+import { spawnOpenclawAgent } from "../openclaw/spawner.js";
+import { spawnOpenclawAgentStream } from "../openclaw/spawner-stream.js";
+
+vi.mock("../claude/spawner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../claude/spawner.js")>();
+  return { ...actual, spawnClaude: vi.fn() };
+});
+vi.mock("../claude/spawner-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../claude/spawner-stream.js")>();
+  return { ...actual, spawnClaudeStream: vi.fn() };
+});
+vi.mock("../openclaw/spawner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../openclaw/spawner.js")>();
+  return { ...actual, spawnOpenclawAgent: vi.fn() };
+});
+vi.mock("../openclaw/spawner-stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../openclaw/spawner-stream.js")>();
+  return { ...actual, spawnOpenclawAgentStream: vi.fn() };
+});
 
 type Spawner = (prompt: string, opts: SpawnOptions) => Promise<SpawnResult>;
+
+const okResult: SpawnResult = {
+  output: "ok",
+  stderr: "",
+  exitCode: 0,
+  durationMs: 1,
+  timedOut: false,
+};
 
 function makeLogger() {
   return {
@@ -269,5 +298,140 @@ describe("LeftHemisphereClient", () => {
     ];
     const serialized = JSON.stringify(allLogCalls);
     expect(serialized).not.toContain(secretOutput);
+  });
+});
+
+describe("LeftHemisphereClient runtime resolver", () => {
+  beforeEach(() => {
+    vi.mocked(spawnClaude).mockReset().mockResolvedValue({ ...okResult, output: "from-claude" });
+    vi.mocked(spawnClaudeStream)
+      .mockReset()
+      .mockResolvedValue({ ...okResult, output: "from-claude-stream" });
+    vi.mocked(spawnOpenclawAgent)
+      .mockReset()
+      .mockResolvedValue({ ...okResult, output: "from-openclaw" });
+    vi.mocked(spawnOpenclawAgentStream)
+      .mockReset()
+      .mockResolvedValue({ ...okResult, output: "from-openclaw-stream" });
+  });
+
+  function bareClient(overrides: Partial<LeftHemisphereConfig> = {}) {
+    return new LeftHemisphereClient({
+      claudePath: "/home/tripp/.local/bin/claude",
+      model: "sonnet",
+      workingDir: "/tmp",
+      ...overrides,
+    });
+  }
+
+  it("defaults to the openclaw spawner when no resolver and no overrides are given", async () => {
+    const client = bareClient();
+
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+
+    expect(result.content).toBe("from-openclaw");
+    expect(spawnOpenclawAgent).toHaveBeenCalledTimes(1);
+    expect(spawnClaude).not.toHaveBeenCalled();
+  });
+
+  it("routes to the openclaw stream spawner by default when onStreamEvent is supplied", async () => {
+    const client = bareClient();
+
+    const result = await client.call({
+      system: "s",
+      user: "u",
+      timeoutMs: 1000,
+      onStreamEvent: () => {},
+    });
+
+    expect(result.content).toBe("from-openclaw-stream");
+    expect(spawnOpenclawAgentStream).toHaveBeenCalledTimes(1);
+    expect(spawnOpenclawAgent).not.toHaveBeenCalled();
+    expect(spawnClaudeStream).not.toHaveBeenCalled();
+  });
+
+  it("routes to the claude spawner pair when runtimeResolver returns 'claude'", async () => {
+    const client = bareClient({ runtimeResolver: () => "claude" });
+
+    const result = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+    expect(result.content).toBe("from-claude");
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+    expect(spawnOpenclawAgent).not.toHaveBeenCalled();
+
+    const streamed = await client.call({
+      system: "s",
+      user: "u",
+      timeoutMs: 1000,
+      onStreamEvent: () => {},
+    });
+    expect(streamed.content).toBe("from-claude-stream");
+    expect(spawnClaudeStream).toHaveBeenCalledTimes(1);
+    expect(spawnOpenclawAgentStream).not.toHaveBeenCalled();
+  });
+
+  it("resolves the runtime on every call, so a flipped resolver changes spawners mid-session", async () => {
+    let runtime: "openclaw" | "claude" = "openclaw";
+    const client = bareClient({ runtimeResolver: () => runtime });
+
+    const first = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+    expect(first.content).toBe("from-openclaw");
+
+    runtime = "claude";
+    const second = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+    expect(second.content).toBe("from-claude");
+    expect(spawnOpenclawAgent).toHaveBeenCalledTimes(1);
+    expect(spawnClaude).toHaveBeenCalledTimes(1);
+  });
+
+  it("bypasses the resolver entirely when both spawner and streamSpawner overrides are injected", async () => {
+    const resolver = vi.fn(() => "claude" as const);
+    const spawner = vi.fn().mockResolvedValue({ ...okResult, output: "from-override" });
+    const streamSpawner = vi
+      .fn()
+      .mockResolvedValue({ ...okResult, output: "from-override-stream" });
+    const client = bareClient({
+      runtimeResolver: resolver,
+      spawner: spawner as unknown as Spawner,
+      streamSpawner: streamSpawner as unknown as LeftHemisphereConfig["streamSpawner"],
+    });
+
+    const plain = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+    const streamed = await client.call({
+      system: "s",
+      user: "u",
+      timeoutMs: 1000,
+      onStreamEvent: () => {},
+    });
+
+    expect(plain.content).toBe("from-override");
+    expect(streamed.content).toBe("from-override-stream");
+    expect(resolver).not.toHaveBeenCalled();
+    expect(spawnClaude).not.toHaveBeenCalled();
+    expect(spawnOpenclawAgent).not.toHaveBeenCalled();
+    expect(spawnClaudeStream).not.toHaveBeenCalled();
+    expect(spawnOpenclawAgentStream).not.toHaveBeenCalled();
+  });
+
+  it("respects a single spawner override within the resolved runtime", async () => {
+    const resolver = vi.fn(() => "claude" as const);
+    const spawner = vi.fn().mockResolvedValue({ ...okResult, output: "from-override" });
+    const client = bareClient({
+      runtimeResolver: resolver,
+      spawner: spawner as unknown as Spawner,
+    });
+
+    const plain = await client.call({ system: "s", user: "u", timeoutMs: 1000 });
+    expect(plain.content).toBe("from-override");
+    expect(spawnClaude).not.toHaveBeenCalled();
+
+    const streamed = await client.call({
+      system: "s",
+      user: "u",
+      timeoutMs: 1000,
+      onStreamEvent: () => {},
+    });
+    expect(streamed.content).toBe("from-claude-stream");
+    expect(resolver).toHaveBeenCalled();
+    expect(spawnClaudeStream).toHaveBeenCalledTimes(1);
   });
 });

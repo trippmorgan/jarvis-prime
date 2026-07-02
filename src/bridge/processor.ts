@@ -27,7 +27,7 @@ import { RightHemisphereClient } from '../brain/right-hemisphere.js'
 import { makeRightClient } from '../brain/right-client-factory.js'
 import { Tier0Classifier, type Tier0Result } from '../brain/tier0-classifier.js'
 import { randomUUID } from 'node:crypto'
-import { ModeState, type Mode } from './mode-state.js'
+import { ModeState, type Mode, type LeftRuntime } from './mode-state.js'
 import {
   NoopReporter,
   type Reporter,
@@ -159,19 +159,29 @@ export type OrchestratorFn = (input: {
   onEvent?: (eventName: string, payload?: CallosumEventPayload) => void
 }) => Promise<BrainResult>
 
+export type DeepCommand =
+  | 'toggle'
+  | 'status'
+  | 'left:openclaw'
+  | 'left:claude'
+
 /**
  * Match the /deep slash command. Returns:
  *   - 'toggle' when the message is exactly `/deep` (case-insensitive)
- *   - 'status' when the message is `/deep status` (case-insensitive)
+ *   - 'status' when the message is `/deep status` (reports mode + left runtime)
+ *   - 'left:openclaw' when `/deep openclaw` (swap left brain to native GLM)
+ *   - 'left:claude' when `/deep claude` (swap left brain to the Claude CLI)
  *   - null otherwise — message proceeds through normal classification
  *
- * Trailing whitespace is tolerated. Anything else after `/deep` (other than
- * `status`) is intentionally not matched — keeps the surface tiny.
+ * Trailing whitespace is tolerated. Anything else after `/deep` is
+ * intentionally not matched — keeps the surface tiny.
  */
-export function matchDeepCommand(text: string): 'toggle' | 'status' | null {
+export function matchDeepCommand(text: string): DeepCommand | null {
   const trimmed = text.trim().toLowerCase()
   if (trimmed === '/deep') return 'toggle'
   if (trimmed === '/deep status') return 'status'
+  if (trimmed === '/deep openclaw') return 'left:openclaw'
+  if (trimmed === '/deep claude') return 'left:claude'
   return null
 }
 
@@ -283,6 +293,13 @@ export interface ProcessorConfig {
    */
   defaultMode?: Mode
   /**
+   * Initial left-brain runtime. Default 'openclaw' = the native GLM left
+   * (direct-Ollama GLM-5.2 with tools on); USE_CLAUDE_LEFT=true boots
+   * 'claude' (Anthropic Claude CLI). /deep claude and /deep openclaw flip
+   * at runtime without a restart.
+   */
+  defaultLeftRuntime?: LeftRuntime
+  /**
    * Async-lane killswitch (default true when dual-brain is enabled).
    * When true, messages classified as "difficult tasks" are ACK'd
    * immediately and processed asynchronously so the event loop stays
@@ -333,6 +350,7 @@ export class MessageProcessor {
     this.modeState = new ModeState(
       config.defaultMode ?? 'single',
       join(config.workingDir, '.data', 'mode-state.json'),
+      config.defaultLeftRuntime ?? 'openclaw',
     )
 
     // Build orchestrator (if dual-brain enabled). Respects injected override for tests.
@@ -344,6 +362,10 @@ export class MessageProcessor {
         model: config.claudeModel,
         workingDir: config.workingDir,
         logger: this.log,
+        // Pick the spawner per-call from current mode state so /deep claude
+        // and /deep openclaw take effect mid-session without rebuilding the
+        // hemisphere client.
+        runtimeResolver: () => this.modeState.currentLeftRuntime,
       })
       // W17.2 — fast cap supersedes the legacy CORPUS_CALLOSUM_TIMEOUT_MS env.
       // A 90s default kills the 10-min Telegram dead-air that triggered W17.2
@@ -740,20 +762,39 @@ export class MessageProcessor {
    * finalises the trace — does not append to history or spawn Claude.
    */
   private async handleDeepCommand(
-    action: 'toggle' | 'status',
+    action: DeepCommand,
     msg: QueueMessage,
     processStart: number,
   ): Promise<string> {
     const previous = this.modeState.current
+    const previousRuntime = this.modeState.currentLeftRuntime
     const mode = action === 'toggle' ? this.modeState.toggle() : previous
-    const reply =
-      mode === 'dual'
-        ? action === 'status'
-          ? '🧠 Dual-brain ON — Claude + Codex collaborating. /deep to flip back.'
-          : '🧠 Dual-brain ON — Claude + Codex collaborating. /deep again to flip back.'
-        : action === 'status'
-          ? '⚡ Claude solo. /deep to engage dual-brain.'
-          : '⚡ Claude solo. /deep again to engage dual-brain.'
+    if (action === 'left:openclaw') this.modeState.setLeftRuntime('openclaw')
+    if (action === 'left:claude') this.modeState.setLeftRuntime('claude')
+    const runtime = this.modeState.currentLeftRuntime
+    const leftLabel = runtime === 'openclaw' ? 'GLM-5.2' : 'Claude'
+
+    let reply: string
+    switch (action) {
+      case 'toggle':
+        reply =
+          mode === 'dual'
+            ? `🧠 Dual-brain ON — ${leftLabel} + Codex collaborating. /deep again to flip back.`
+            : '⚡ Claude solo. /deep again to engage dual-brain.'
+        break
+      case 'status':
+        reply =
+          mode === 'dual'
+            ? `🧠 Dual-brain ON — ${leftLabel} + Codex collaborating. Left runtime: ${runtime}. /deep to flip back. /deep claude or /deep openclaw to swap left runtime.`
+            : `⚡ Claude solo. Left runtime: ${runtime} (${leftLabel} fronts dual-brain). /deep to engage dual-brain. /deep claude or /deep openclaw to swap left runtime.`
+        break
+      case 'left:openclaw':
+        reply = '🧠 Left brain → GLM-5.2 (native, tools on).'
+        break
+      case 'left:claude':
+        reply = '🧠 Left brain → Claude.'
+        break
+    }
 
     this.log.info(
       {
@@ -762,8 +803,10 @@ export class MessageProcessor {
         action,
         previousMode: previous,
         mode,
+        previousLeftRuntime: previousRuntime,
+        leftRuntime: runtime,
       },
-      `/deep ${action} → ${mode}`,
+      `/deep ${action} → mode=${mode} left=${runtime}`,
     )
 
     await this.deliver(msg.chatId, reply).catch(() => {})
@@ -772,21 +815,54 @@ export class MessageProcessor {
   }
 
   /**
-   * Queue-bypass handler for /deep. Toggles mode + replies immediately at
-   * submit() time so the toggle never waits behind an in-flight LLM turn. No
-   * trace / history / queue — a mode flip is pure state. Fail-soft delivery.
+   * Queue-bypass handler for /deep. Toggles mode / swaps the left runtime +
+   * replies immediately at submit() time so the command never waits behind an
+   * in-flight LLM turn. No trace / history / queue — a mode flip is pure
+   * state. Fail-soft delivery.
    */
-  private handleDeepImmediate(messageId: string, chatId: string, action: 'toggle' | 'status'): void {
+  private handleDeepImmediate(messageId: string, chatId: string, action: DeepCommand): void {
     const previous = this.modeState.current
+    const previousRuntime = this.modeState.currentLeftRuntime
     const mode = action === 'toggle' ? this.modeState.toggle() : previous
-    const reply =
-      mode === 'dual'
-        ? '🧠 Dual-brain ON — Claude + Codex collaborating. /deep again to flip back.'
-        : '⚡ Claude solo. /deep again to engage dual-brain.'
+    if (action === 'left:openclaw') this.modeState.setLeftRuntime('openclaw')
+    if (action === 'left:claude') this.modeState.setLeftRuntime('claude')
+    const runtime = this.modeState.currentLeftRuntime
+    const leftLabel = runtime === 'openclaw' ? 'GLM-5.2' : 'Claude'
+
+    let reply: string
+    switch (action) {
+      case 'toggle':
+        reply =
+          mode === 'dual'
+            ? `🧠 Dual-brain ON — ${leftLabel} + Codex collaborating. /deep again to flip back.`
+            : '⚡ Claude solo. /deep again to engage dual-brain.'
+        break
+      case 'status':
+        reply =
+          mode === 'dual'
+            ? `🧠 Dual-brain ON — ${leftLabel} + Codex collaborating. Left runtime: ${runtime}. /deep to flip back. /deep claude or /deep openclaw to swap left runtime.`
+            : `⚡ Claude solo. Left runtime: ${runtime} (${leftLabel} fronts dual-brain). /deep to engage dual-brain. /deep claude or /deep openclaw to swap left runtime.`
+        break
+      case 'left:openclaw':
+        reply = '🧠 Left brain → GLM-5.2 (native, tools on).'
+        break
+      case 'left:claude':
+        reply = '🧠 Left brain → Claude.'
+        break
+    }
 
     this.log.info(
-      { event: 'deep_command', messageId, action, previousMode: previous, mode, bypass: true },
-      `/deep ${action} → ${mode} (queue bypass)`,
+      {
+        event: 'deep_command',
+        messageId,
+        action,
+        previousMode: previous,
+        mode,
+        previousLeftRuntime: previousRuntime,
+        leftRuntime: runtime,
+        bypass: true,
+      },
+      `/deep ${action} → mode=${mode} left=${runtime} (queue bypass)`,
     )
 
     void this.deliver(chatId, reply).catch(() => {})

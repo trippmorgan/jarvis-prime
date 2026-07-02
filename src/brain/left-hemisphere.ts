@@ -1,8 +1,11 @@
 import { spawnClaude } from "../claude/spawner.js";
 import { spawnClaudeStream } from "../claude/spawner-stream.js";
+import { spawnOpenclawAgent } from "../openclaw/spawner.js";
+import { spawnOpenclawAgentStream } from "../openclaw/spawner-stream.js";
 import type { SpawnOptions, SpawnResult } from "../claude/types.js";
 import type { StreamEvent } from "../claude/stream-formatter.js";
 import { LeftHemisphereError, type HemisphereClient } from "./types.js";
+import type { LeftRuntime } from "../bridge/mode-state.js";
 
 export type Spawner = (prompt: string, opts: SpawnOptions) => Promise<SpawnResult>;
 /** W8.8.6 — streaming variant. Optional; left.call routes here when caller supplies onStreamEvent. */
@@ -20,12 +23,20 @@ export interface LeftHemisphereLogger {
 export interface LeftHemisphereConfig {
   claudePath: string;
   model: string;
-  /** Bridge working directory — passed as cwd to every Claude spawn. */
+  /** Bridge working directory — passed as cwd to every left-brain spawn. */
   workingDir: string;
   logger?: LeftHemisphereLogger;
-  /** Injectable for testing. Defaults to the real spawnClaude. */
+  /**
+   * Per-call resolver for which left runtime to use ('openclaw' | 'claude').
+   * Defaults to a constant 'openclaw' resolver — local GLM with full tools
+   * via the native openclaw spawner. Wired through the processor so
+   * /deep claude / /deep openclaw flip mid-session without rebuilding
+   * the client.
+   */
+  runtimeResolver?: () => LeftRuntime;
+  /** Injectable for testing. Overrides the runtime-aware spawner. */
   spawner?: Spawner;
-  /** Injectable streaming variant for testing. Defaults to spawnClaudeStream. */
+  /** Injectable streaming variant for testing. Overrides the runtime-aware streamer. */
   streamSpawner?: StreamSpawner;
 }
 
@@ -42,16 +53,40 @@ export class LeftHemisphereClient implements HemisphereClient {
   private readonly model: string;
   private readonly workingDir: string;
   private readonly logger?: LeftHemisphereLogger;
-  private readonly spawner: Spawner;
-  private readonly streamSpawner: StreamSpawner;
+  private readonly runtimeResolver: () => LeftRuntime;
+  private readonly spawnerOverride?: Spawner;
+  private readonly streamSpawnerOverride?: StreamSpawner;
 
   constructor(config: LeftHemisphereConfig) {
     this.claudePath = config.claudePath;
     this.model = config.model;
     this.workingDir = config.workingDir;
     this.logger = config.logger;
-    this.spawner = config.spawner ?? spawnClaude;
-    this.streamSpawner = config.streamSpawner ?? spawnClaudeStream;
+    this.runtimeResolver = config.runtimeResolver ?? (() => "openclaw");
+    if (config.spawner) this.spawnerOverride = config.spawner;
+    if (config.streamSpawner) this.streamSpawnerOverride = config.streamSpawner;
+  }
+
+  /**
+   * Pick the spawner pair for the current runtime. Test overrides win — they
+   * substitute for whichever runtime is selected, so corpus-callosum tests
+   * don't need to know about the runtime split.
+   */
+  private resolveSpawners(): { spawner: Spawner; streamSpawner: StreamSpawner } {
+    if (this.spawnerOverride && this.streamSpawnerOverride) {
+      return { spawner: this.spawnerOverride, streamSpawner: this.streamSpawnerOverride };
+    }
+    const runtime = this.runtimeResolver();
+    if (runtime === "openclaw") {
+      return {
+        spawner: this.spawnerOverride ?? (spawnOpenclawAgent as Spawner),
+        streamSpawner: this.streamSpawnerOverride ?? (spawnOpenclawAgentStream as StreamSpawner),
+      };
+    }
+    return {
+      spawner: this.spawnerOverride ?? spawnClaude,
+      streamSpawner: this.streamSpawnerOverride ?? spawnClaudeStream,
+    };
   }
 
   async call(input: {
@@ -77,6 +112,7 @@ export class LeftHemisphereClient implements HemisphereClient {
       "left hemisphere call starting",
     );
 
+    const { spawner, streamSpawner } = this.resolveSpawners();
     let result: SpawnResult;
     try {
       const spawnOpts = {
@@ -87,8 +123,8 @@ export class LeftHemisphereClient implements HemisphereClient {
         enableTools,
       };
       result = onStreamEvent
-        ? await this.streamSpawner(prompt, { ...spawnOpts, onEvent: onStreamEvent })
-        : await this.spawner(prompt, spawnOpts);
+        ? await streamSpawner(prompt, { ...spawnOpts, onEvent: onStreamEvent })
+        : await spawner(prompt, spawnOpts);
     } catch (err) {
       const durationMs = Date.now() - start;
       this.logger?.error(
