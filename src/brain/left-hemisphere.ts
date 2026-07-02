@@ -125,18 +125,22 @@ export class LeftHemisphereClient implements HemisphereClient {
     const prompt = `${system}\n\n${user}`;
     const start = Date.now();
 
+    const { spawner, streamSpawner, runtime } = this.resolveSpawners();
+
+    // Log the EFFECTIVE model for the resolved runtime — `this.model` is the
+    // Claude CLI model and reporting it while the native GLM runtime serves
+    // the call makes 401/latency triage actively misleading.
     this.logger?.info(
       {
         event: "left_hemisphere_call_start",
         hemisphere: "left",
-        model: this.model,
+        runtime: runtime ?? "override",
+        model: runtime === "openclaw" ? (process.env.LEFT_MODEL ?? "glm-5.2") : this.model,
         timeoutMs,
         enableTools: enableTools ?? true,
       },
       "left hemisphere call starting",
     );
-
-    const { spawner, streamSpawner, runtime } = this.resolveSpawners();
 
     // One attempt against a given spawner pair with a given model; every other
     // spawn parameter (claudePath, workingDir, timeoutMs, tools, streaming)
