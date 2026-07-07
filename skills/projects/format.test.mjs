@@ -5,9 +5,9 @@
  * Mirrors the SPEC invariants the service emits; this is the surface gate.
  */
 
-import { describe, it } from 'node:test';
+import { describe, it } from 'vitest';
 import assert from 'node:assert/strict';
-import { formatPortfolioForTelegram } from './format.mjs';
+import { formatPortfolioForTelegram, formatWarningsForTelegram } from './format.mjs';
 
 const baseRow = {
   project: 'portfolio-surface',
@@ -118,5 +118,61 @@ describe('formatPortfolioForTelegram — honest-doubt invariants', () => {
     });
     assert.doesNotMatch(out, /^\s*→\s*$/m);
     assert.ok(!out.includes('→ \n'));
+  });
+
+  // ─── Phase 4-B — warnings footer drill-down ────────────────────────────
+
+  it('appends a warnings footer with count when warnings ride along the envelope', () => {
+    const out = formatPortfolioForTelegram({
+      rows: [{ ...baseRow }],
+      degraded: false,
+      warnings: [
+        { source: 'poller', kind: 'ssh_cat_failure', detail: 'x', at: '2026-05-28T18:00:00Z' },
+        { source: 'poller', kind: 'missing_frontmatter', detail: 'y', at: '2026-05-28T18:00:00Z' },
+        { source: 'poller', kind: 'missing_frontmatter', detail: 'z', at: '2026-05-28T18:00:00Z' },
+      ],
+    });
+    assert.match(out, /⚠ 3 warnings \(see \/projects warnings\)/);
+  });
+
+  it('warnings footer uses singular noun for exactly one warning', () => {
+    const out = formatPortfolioForTelegram({
+      rows: [{ ...baseRow }],
+      degraded: false,
+      warnings: [
+        { source: 'poller', kind: 'ssh_cat_failure', detail: 'x', at: '2026-05-28T18:00:00Z' },
+      ],
+    });
+    assert.match(out, /⚠ 1 warning \(see \/projects warnings\)/);
+  });
+
+  it('empty warnings array does not emit a footer — silence is signal', () => {
+    const out = formatPortfolioForTelegram({
+      rows: [{ ...baseRow }],
+      degraded: false,
+      warnings: [],
+    });
+    assert.doesNotMatch(out, /see \/projects warnings/);
+  });
+});
+
+describe('formatWarningsForTelegram — drill-down subcommand', () => {
+  it('groups by source then kind so 19 identical warnings do not scroll off screen', () => {
+    const out = formatWarningsForTelegram({
+      warnings: [
+        { source: 'poller', kind: 'missing_frontmatter', slug: 'a', detail: 'a: missing YAML frontmatter', at: '2026-05-28T18:00:00Z' },
+        { source: 'poller', kind: 'missing_frontmatter', slug: 'b', detail: 'b: missing YAML frontmatter', at: '2026-05-28T18:00:00Z' },
+        { source: 'poller', kind: 'ssh_cat_failure', slug: 'c', detail: 'pretoria:/tmp/x (Connection refused)', at: '2026-05-28T18:00:00Z' },
+      ],
+    });
+    assert.match(out, /^\[T0 READ\] \/projects warnings — 3 total$/m);
+    assert.match(out, /^\[poller\]$/m);
+    assert.match(out, /missing_frontmatter × 2/);
+    assert.match(out, /ssh_cat_failure × 1/);
+  });
+
+  it('empty envelope prints 0 total, not a fabricated warning', () => {
+    const out = formatWarningsForTelegram({ warnings: [] });
+    assert.ok(out.includes('0 warnings'));
   });
 });

@@ -37,10 +37,20 @@
  */
 
 /**
+ * @typedef {Object} PortfolioWarning
+ * @property {'poller'|'cli'|'note'} source
+ * @property {string} [slug]
+ * @property {string} kind
+ * @property {string} detail
+ * @property {string} at
+ */
+
+/**
  * @typedef {Object} PortfolioEnvelope
  * @property {PortfolioRow[]} rows
  * @property {boolean} degraded
  * @property {string} [message]
+ * @property {PortfolioWarning[]} [warnings]
  */
 
 /**
@@ -53,6 +63,7 @@
 export function formatPortfolioForTelegram(envelope) {
   const rows = Array.isArray(envelope?.rows) ? envelope.rows : [];
   const degraded = envelope?.degraded === true;
+  const warnings = Array.isArray(envelope?.warnings) ? envelope.warnings : [];
 
   const lines = [];
 
@@ -69,6 +80,11 @@ export function formatPortfolioForTelegram(envelope) {
       lines.push('');
       lines.push(...renderRows(rows));
     }
+    // Phase 4-B footer — drill-down count when structured warnings ride along.
+    if (warnings.length > 0) {
+      lines.push('');
+      lines.push(...renderWarningsFooter(warnings));
+    }
     return lines.join('\n');
   }
 
@@ -76,11 +92,76 @@ export function formatPortfolioForTelegram(envelope) {
   lines.push(`[T0 READ] /projects — ${headerCount}`);
 
   if (rows.length === 0) {
+    if (warnings.length > 0) {
+      lines.push('');
+      lines.push(...renderWarningsFooter(warnings));
+    }
     return lines.join('\n');
   }
 
   lines.push('');
   lines.push(...renderRows(rows));
+
+  if (warnings.length > 0) {
+    lines.push('');
+    lines.push(...renderWarningsFooter(warnings));
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Render the drill-down footer. Compact by design — the full list is
+ * available via `render.mjs warnings` (T0 read subcommand).
+ *
+ * @param {PortfolioWarning[]} warnings
+ * @returns {string[]}
+ */
+function renderWarningsFooter(warnings) {
+  const count = warnings.length;
+  const noun = count === 1 ? 'warning' : 'warnings';
+  return [`⚠ ${count} ${noun} (see /projects warnings)`];
+}
+
+/**
+ * Format the standalone warnings drill-down (invoked as
+ * `render.mjs warnings`). Groups by source + kind so 19 identical
+ * "missing_frontmatter" hits do not scroll the whole message off screen.
+ *
+ * @param {PortfolioEnvelope} envelope
+ * @returns {string}
+ */
+export function formatWarningsForTelegram(envelope) {
+  const warnings = Array.isArray(envelope?.warnings) ? envelope.warnings : [];
+  if (warnings.length === 0) {
+    return '[T0 READ] /projects warnings — 0 warnings';
+  }
+
+  const lines = [`[T0 READ] /projects warnings — ${warnings.length} total`];
+
+  // Group by kind under source.
+  /** @type {Record<string, Record<string, PortfolioWarning[]>>} */
+  const grouped = {};
+  for (const w of warnings) {
+    const src = w.source || 'unknown';
+    const kind = w.kind || 'parse_error';
+    grouped[src] = grouped[src] || {};
+    grouped[src][kind] = grouped[src][kind] || [];
+    grouped[src][kind].push(w);
+  }
+
+  for (const src of Object.keys(grouped).sort()) {
+    lines.push('');
+    lines.push(`[${src}]`);
+    for (const kind of Object.keys(grouped[src]).sort()) {
+      const items = grouped[src][kind];
+      lines.push(`  ${kind} × ${items.length}`);
+      for (const w of items) {
+        const slug = w.slug ? `${w.slug}: ` : '';
+        lines.push(`   • ${slug}${w.detail}`);
+      }
+    }
+  }
 
   return lines.join('\n');
 }

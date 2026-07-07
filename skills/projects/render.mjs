@@ -19,7 +19,7 @@
 
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { formatPortfolioForTelegram } from './format.mjs';
+import { formatPortfolioForTelegram, formatWarningsForTelegram } from './format.mjs';
 
 const DEFAULT_JARVIS_OS_ROOT = '/home/tripp/.openclaw/workspace/jarvis-os';
 
@@ -104,7 +104,12 @@ async function main() {
     return;
   }
 
-  const output = formatPortfolioForTelegram(envelope);
+  // Optional subcommand: `render.mjs warnings` prints the drill-down.
+  // Anything else defaults to the standard portfolio render.
+  const mode = process.argv[2] === 'warnings' ? 'warnings' : 'portfolio';
+  const output = mode === 'warnings'
+    ? formatWarningsForTelegram(envelope)
+    : formatPortfolioForTelegram(envelope);
   process.stdout.write(output + '\n');
 }
 
