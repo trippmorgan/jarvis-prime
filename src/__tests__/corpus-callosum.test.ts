@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   corpusCallosum,
+  DEGRADED_HEMISPHERE_CAVEAT,
   type CorpusCallosumDeps,
   type CorpusCallosumInput,
   type SkillShim,
@@ -248,33 +249,55 @@ describe("corpusCallosum — happy path", () => {
 });
 
 describe("corpusCallosum — error paths", () => {
-  it("pass-1 left failure bubbles as LeftHemisphereError and aborts orchestration", async () => {
+  it("pass-1 left failure degrades to right-only flow with caveat (DIL 2026-07-05)", async () => {
     const left = makeFakeClient([
       { error: new LeftHemisphereError("left spawn blew up") },
+      { content: "L2 from survivor context", durationMs: 11 },
+      { content: "final", durationMs: 12 },
     ]);
     const right = makeFakeClient([
       { content: "R1", durationMs: 20 },
-      // second response shouldn't be consumed
       { content: "R2", durationMs: 21 },
     ]);
     const deps = buildDeps(left, right);
 
-    await expect(corpusCallosum(deps, HAPPY_INPUT)).rejects.toBeInstanceOf(
-      LeftHemisphereError,
-    );
+    const result = await corpusCallosum(deps, HAPPY_INPUT);
 
-    // left integration + p2 never called
-    expect(left.calls.length).toBe(1);
-    // right p2 never called (only p1 fired before rejection aborted)
-    expect(right.calls.length).toBeLessThanOrEqual(1);
+    expect(result.finalText.startsWith(DEGRADED_HEMISPHERE_CAVEAT.trim()))
+      .toBe(true);
+    expect(result.finalText).toContain("final");
+    // The flow continued: pass-2 + integration still ran on both sides.
+    expect(left.calls.length).toBe(3);
+    expect(right.calls.length).toBe(2);
+    // The failed side's pass-1 draft is the degraded placeholder.
+    expect(result.trace.p1Left.content).toContain("left hemisphere unavailable");
   });
 
-  it("pass-1 right failure bubbles as RightHemisphereError and aborts orchestration", async () => {
+  it("pass-1 right failure degrades to left-only flow with caveat (DIL 2026-07-05)", async () => {
     const left = makeFakeClient([
       { content: "L1", durationMs: 10 },
-      // p2 + integration shouldn't be consumed
       { content: "L2", durationMs: 11 },
       { content: "final", durationMs: 12 },
+    ]);
+    const right = makeFakeClient([
+      { error: new RightHemisphereError("right network error") },
+      { content: "R2", durationMs: 21 },
+    ]);
+    const deps = buildDeps(left, right);
+
+    const result = await corpusCallosum(deps, HAPPY_INPUT);
+
+    expect(result.finalText.startsWith(DEGRADED_HEMISPHERE_CAVEAT.trim()))
+      .toBe(true);
+    expect(result.finalText).toContain("final");
+    expect(result.trace.p1Right.content).toContain(
+      "right hemisphere unavailable",
+    );
+  });
+
+  it("pass-1 BOTH-hemisphere failure still throws (complete outage)", async () => {
+    const left = makeFakeClient([
+      { error: new LeftHemisphereError("left spawn blew up") },
     ]);
     const right = makeFakeClient([
       { error: new RightHemisphereError("right network error") },
@@ -282,18 +305,17 @@ describe("corpusCallosum — error paths", () => {
     const deps = buildDeps(left, right);
 
     await expect(corpusCallosum(deps, HAPPY_INPUT)).rejects.toBeInstanceOf(
-      RightHemisphereError,
+      LeftHemisphereError,
     );
-
+    expect(left.calls.length).toBe(1);
     expect(right.calls.length).toBe(1);
-    // left's p2 and integration never happened
-    expect(left.calls.length).toBeLessThanOrEqual(1);
   });
 
-  it("pass-2 left failure bubbles as LeftHemisphereError", async () => {
+  it("pass-2 left failure degrades and integration still delivers with caveat", async () => {
     const left = makeFakeClient([
       { content: "L1", durationMs: 10 },
       { error: new LeftHemisphereError("left p2 failed") },
+      { content: "final", durationMs: 12 },
     ]);
     const right = makeFakeClient([
       { content: "R1", durationMs: 20 },
@@ -301,15 +323,17 @@ describe("corpusCallosum — error paths", () => {
     ]);
     const deps = buildDeps(left, right);
 
-    await expect(corpusCallosum(deps, HAPPY_INPUT)).rejects.toBeInstanceOf(
-      LeftHemisphereError,
-    );
+    const result = await corpusCallosum(deps, HAPPY_INPUT);
 
-    // integration never called
-    expect(left.calls.length).toBe(2);
+    expect(result.finalText.startsWith(DEGRADED_HEMISPHERE_CAVEAT.trim()))
+      .toBe(true);
+    expect(result.finalText).toContain("final");
+    // pass-1 + failed pass-2 + integration
+    expect(left.calls.length).toBe(3);
+    expect(result.trace.p2Left.content).toContain("left hemisphere unavailable");
   });
 
-  it("pass-2 right failure bubbles as RightHemisphereError", async () => {
+  it("pass-2 right failure degrades and integration still delivers with caveat", async () => {
     const left = makeFakeClient([
       { content: "L1", durationMs: 10 },
       { content: "L2", durationMs: 11 },
@@ -321,12 +345,14 @@ describe("corpusCallosum — error paths", () => {
     ]);
     const deps = buildDeps(left, right);
 
-    await expect(corpusCallosum(deps, HAPPY_INPUT)).rejects.toBeInstanceOf(
-      RightHemisphereError,
-    );
+    const result = await corpusCallosum(deps, HAPPY_INPUT);
 
-    // integration never called
-    expect(left.calls.length).toBeLessThanOrEqual(2);
+    expect(result.finalText.startsWith(DEGRADED_HEMISPHERE_CAVEAT.trim()))
+      .toBe(true);
+    expect(result.finalText).toContain("final");
+    expect(result.trace.p2Right.content).toContain(
+      "right hemisphere unavailable",
+    );
   });
 
   it("integration left timeout → falls back to pass-2 left draft with caveat (DIL 2026-05-26 #3)", async () => {
@@ -463,7 +489,7 @@ describe("corpusCallosum — dual-brain timeout telemetry (2026-06-07)", () => {
     expect(t?.timeout_phase).toBe("integration");
   });
 
-  it("emits timeout_phase=pass2 when pre-integration left timeout propagates", async () => {
+  it("emits route=dual-brain-degraded + timeout_phase=pass2 when a pass-2 left timeout degrades", async () => {
     const left = makeFakeClient([
       { content: "L1", durationMs: 5 },
       {
@@ -471,6 +497,7 @@ describe("corpusCallosum — dual-brain timeout telemetry (2026-06-07)", () => {
           "left hemisphere timed out after 1000ms",
         ),
       },
+      { content: "final", durationMs: 6 },
     ]);
     const right = makeFakeClient([
       { content: "R1", durationMs: 8 },
@@ -479,14 +506,13 @@ describe("corpusCallosum — dual-brain timeout telemetry (2026-06-07)", () => {
     const logger = makeLogger();
     const deps = buildDeps(left, right, { logger });
 
-    await expect(corpusCallosum(deps, HAPPY_INPUT)).rejects.toBeInstanceOf(
-      LeftHemisphereError,
-    );
+    const result = await corpusCallosum(deps, HAPPY_INPUT);
+    expect(result.finalText).toContain("final");
 
     const t = findTelemetry(logger);
     expect(t).toBeTruthy();
-    expect(t?.route).toBe("dual-brain-errored");
-    expect(t?.outcome).toBe("errored");
+    expect(t?.route).toBe("dual-brain-degraded");
+    expect(t?.outcome).toBe("completed");
     expect(t?.timeout_ms).toBe(1000);
     expect(t?.timeout_phase).toBe("pass2");
   });

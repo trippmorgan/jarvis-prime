@@ -68,6 +68,16 @@ import {
 export const INTEGRATION_FALLBACK_CAVEAT =
   "_(Integration step timed out — delivering the pre-integration draft. Some refinement may be missing.)_\n\n";
 
+/**
+ * Caveat prepended when a hemisphere failed mid-flow (timeout, fallback-chain
+ * exhaustion, malformed response) and the dispatch completed on the surviving
+ * hemisphere instead of hard-failing. DIL 2026-07-05 finding — 58
+ * dual_brain_failed events in one week, each discarding the surviving
+ * hemisphere's completed work.
+ */
+export const DEGRADED_HEMISPHERE_CAVEAT =
+  "_(One hemisphere was unavailable this turn — delivering the surviving hemisphere's output. Some cross-brain refinement may be missing.)_\n\n";
+
 /** Minimal structured logger — subset of Fastify's pino surface. */
 export interface CorpusCallosumLogger {
   info: (obj: unknown, msg?: string) => void;
@@ -186,6 +196,8 @@ export interface CorpusCallosumInput {
 // -----------------------------------------------------------------------------
 export type DualBrainTelemetryRoute =
   | "dual-brain"
+  /** One hemisphere failed mid-flow; completed on the survivor. */
+  | "dual-brain-degraded"
   | "integrator-left-fallback"
   | "dual-brain-errored";
 
@@ -344,6 +356,21 @@ export async function corpusCallosum(
     // W8-T13 — stable scope so callosum_pass2_ok can emit these for the card.
     let rightModeForCard: "skill" | "research" | undefined;
     let rightSkillForCard: string | undefined;
+    // Degraded single-hemisphere mode (DIL 2026-07-05): when exactly one
+    // hemisphere fails in a parallel pass, continue on the survivor with a
+    // placeholder draft instead of hard-failing the whole dispatch. Both
+    // hemispheres failing still throws (complete-outage semantics kept).
+    let degradedMode = false;
+    let p2LeftDegraded = false;
+    const errText = (reason: unknown): string =>
+      reason instanceof Error ? reason.message : String(reason);
+    const degradedDraft = (
+      hemisphere: "left" | "right",
+      phaseStart: number,
+    ): { content: string; durationMs: number } => ({
+      content: `[${hemisphere} hemisphere unavailable this pass — proceeding with the surviving hemisphere only]`,
+      durationMs: Date.now() - phaseStart,
+    });
 
     if (routerEnabled) {
       // --- Wave 8 router path — SEQUENTIAL pass-1 --------------------------------
@@ -508,7 +535,7 @@ export async function corpusCallosum(
       const p1LeftPrompt = leftAffordancePrompt(basePrompt, history, userMsg);
       const p1RightPrompt = rightAffordancePrompt(basePrompt, history, userMsg);
 
-      [p1LeftResult, p1RightResult] = await Promise.all([
+      const [p1LeftS, p1RightS] = await Promise.allSettled([
         callLeft("pass1", {
           system: p1LeftPrompt.system,
           user: p1LeftPrompt.user,
@@ -521,6 +548,41 @@ export async function corpusCallosum(
           timeoutMs,
         }),
       ]);
+      if (p1LeftS.status === "rejected" && p1RightS.status === "rejected") {
+        // Complete outage — preserve the existing hard-fail semantics so
+        // the processor's single-brain fallback (or error surface) engages.
+        throw p1LeftS.reason;
+      }
+      if (p1LeftS.status === "rejected" || p1RightS.status === "rejected") {
+        const failed = p1LeftS.status === "rejected" ? "left" : "right";
+        const reason =
+          p1LeftS.status === "rejected"
+            ? p1LeftS.reason
+            : p1RightS.status === "rejected"
+              ? p1RightS.reason
+              : undefined;
+        degradedMode = true;
+        logger?.warn(
+          {
+            event: "callosum_pass1_degraded",
+            hemisphere: failed,
+            error: errText(reason),
+          },
+          "pass 1 hemisphere failed — continuing on the survivor",
+        );
+        emit("callosum_hemisphere_degraded", {
+          hemisphere: failed,
+          phase: "pass1",
+        });
+      }
+      p1LeftResult =
+        p1LeftS.status === "fulfilled"
+          ? p1LeftS.value
+          : degradedDraft("left", pass1PhaseStart);
+      p1RightResult =
+        p1RightS.status === "fulfilled"
+          ? p1RightS.value
+          : degradedDraft("right", pass1PhaseStart);
     }
 
     const pass1WallMs = Date.now() - pass1PhaseStart;
@@ -557,7 +619,7 @@ export async function corpusCallosum(
       pass2Tools,
     );
 
-    const [p2LeftResult, p2RightResult] = await Promise.all([
+    const [p2LeftS, p2RightS] = await Promise.allSettled([
       callLeft("pass2", {
         system: p2LeftPrompt.system,
         user: p2LeftPrompt.user,
@@ -570,6 +632,41 @@ export async function corpusCallosum(
         timeoutMs,
       }),
     ]);
+    if (p2LeftS.status === "rejected" && p2RightS.status === "rejected") {
+      // Complete outage — preserve the existing hard-fail semantics.
+      throw p2LeftS.reason;
+    }
+    if (p2LeftS.status === "rejected" || p2RightS.status === "rejected") {
+      const failed = p2LeftS.status === "rejected" ? "left" : "right";
+      const reason =
+        p2LeftS.status === "rejected"
+          ? p2LeftS.reason
+          : p2RightS.status === "rejected"
+            ? p2RightS.reason
+            : undefined;
+      degradedMode = true;
+      logger?.warn(
+        {
+          event: "callosum_pass2_degraded",
+          hemisphere: failed,
+          error: errText(reason),
+        },
+        "pass 2 hemisphere failed — continuing on the survivor",
+      );
+      emit("callosum_hemisphere_degraded", {
+        hemisphere: failed,
+        phase: "pass2",
+      });
+    }
+    p2LeftDegraded = p2LeftS.status === "rejected";
+    const p2LeftResult =
+      p2LeftS.status === "fulfilled"
+        ? p2LeftS.value
+        : degradedDraft("left", pass2PhaseStart);
+    const p2RightResult =
+      p2RightS.status === "fulfilled"
+        ? p2RightS.value
+        : degradedDraft("right", pass2PhaseStart);
 
     const pass2WallMs = Date.now() - pass2PhaseStart;
 
@@ -643,27 +740,34 @@ export async function corpusCallosum(
       // Surface that with a caveat instead of throwing a hard error at the
       // user. Other error classes (IntegrationError, generic Error) still
       // propagate so we don't mask merge bugs.
+      // When pass-2 left itself ran degraded (placeholder draft), the
+      // useful pre-integration work lives in the RIGHT draft — fall back
+      // to that instead of surfacing the placeholder.
+      const fallbackDraft = p2LeftDegraded
+        ? p2RightResult.content
+        : p2LeftResult.content;
       if (
         err instanceof LeftHemisphereError &&
-        p2LeftResult.content.trim().length > 0
+        fallbackDraft.trim().length > 0
       ) {
         logger?.warn(
           {
             event: "integration_left_fallback",
             error: err.message,
-            p2LeftLength: p2LeftResult.content.length,
+            fallbackSource: p2LeftDegraded ? "p2Right" : "p2Left",
+            fallbackLength: fallbackDraft.length,
           },
-          "integration left failed — falling back to pass-2 left draft",
+          "integration left failed — falling back to a pass-2 draft",
         );
         emit("integration_left_fallback", {
           durationMs: Date.now() - integrationStart,
         });
         // Dual-brain timeout telemetry — fallback path engaged. Outcome stays
         // "timed_out" because the integrator-left call hit its budget; we still
-        // deliver a useful result via the pass-2 left draft fallback.
+        // deliver a useful result via the pass-2 draft fallback.
         telemetryRoute = "integrator-left-fallback";
         telemetryOutcome = "timed_out";
-        integrationContent = INTEGRATION_FALLBACK_CAVEAT + p2LeftResult.content;
+        integrationContent = INTEGRATION_FALLBACK_CAVEAT + fallbackDraft;
         integrationCallDurationMs = Date.now() - integrationStart;
       } else {
         if (err instanceof IntegrationError) {
@@ -736,6 +840,15 @@ export async function corpusCallosum(
       }
     }
 
+    // Degraded-mode transparency: tell the user one hemisphere was missing
+    // rather than silently delivering a thinner answer.
+    if (
+      degradedMode &&
+      !integrationContent.startsWith(DEGRADED_HEMISPHERE_CAVEAT)
+    ) {
+      integrationContent = DEGRADED_HEMISPHERE_CAVEAT + integrationContent;
+    }
+
     const integrationMs = Date.now() - integrationStart;
     const finalText = integrationContent.trim();
 
@@ -752,6 +865,11 @@ export async function corpusCallosum(
     // keep that label and the "timed_out" outcome rather than overwriting them.
     if (telemetryRoute !== "integrator-left-fallback") {
       telemetryOutcome = "completed";
+      // Degraded completions get their own route bucket so fallback
+      // frequency is monitorable (they still count as completed).
+      if (degradedMode) {
+        telemetryRoute = "dual-brain-degraded";
+      }
     }
 
     return {
