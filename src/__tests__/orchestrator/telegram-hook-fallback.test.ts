@@ -5,10 +5,16 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { orchestrate, classifyIntent } = vi.hoisted(() => ({
-  orchestrate: vi.fn(),
-  classifyIntent: vi.fn(() => 'workflow'),
-}))
+const { orchestrate, classifyIntent } = vi.hoisted(() => {
+  // These tests exercise the legacy orchestrated path, which is behind the
+  // 2026-06-26 kill switch (default off). Force it on before the module-level
+  // flag in telegram-hook.ts is evaluated at import time.
+  process.env.JARVIS_WORKFLOW_ORCHESTRATOR_ENABLED = '1'
+  return {
+    orchestrate: vi.fn(),
+    classifyIntent: vi.fn(() => 'workflow'),
+  }
+})
 vi.mock('../../orchestrator/index.js', () => ({
   orchestrate,
   classifyIntent: (t: string) => classifyIntent(t),

@@ -92,6 +92,14 @@ export function classifyConfirmReply(
 // Kill-switch: JARVIS_ORCH_FALLBACK_ENABLED=0.
 const ORCH_FALLBACK_ENABLED = process.env.JARVIS_ORCH_FALLBACK_ENABLED !== '0'
 
+// 2026-06-26 — Safety kill switch. Tripp requested removal of the old
+// plain-English Telegram workflow orchestrator after it repeatedly crashed /
+// wedged radio-station tasks. Leave the module importable for tests and future
+// reference, but do not let this hook claim Telegram messages or arm T3 gates
+// unless explicitly re-enabled. Normal conversational OpenClaw/Jarvis handling
+// still runs through cfg.onChat.
+const WORKFLOW_ORCHESTRATOR_ENABLED = process.env.JARVIS_WORKFLOW_ORCHESTRATOR_ENABLED === '1'
+
 /** PHI-safe one-liner of what failed: command_type + status reason only
  *  (reasons are statuses like extract-error / poll-timeout — never PHI). */
 export function summarizeOrchFailures(events: ExecEvent[]): string {
@@ -194,6 +202,17 @@ export interface TelegramHookConfig {
 
 export function createTelegramOrchestratorHook(cfg: TelegramHookConfig) {
   return async function handle(chatId: string, text: string, userId: string): Promise<void> {
+    if (!WORKFLOW_ORCHESTRATOR_ENABLED) {
+      // Clear any stale in-memory gate so a later accidental re-enable cannot
+      // publish an old T3 action. Then delegate to normal chat handling.
+      if (pendingConfirms.has(chatId)) {
+        pendingConfirms.delete(chatId)
+        clearConfirmReminder(chatId)
+      }
+      await cfg.onChat(chatId, text, userId)
+      return
+    }
+
     // ── 0. Pending T3 confirmation intercept ──────────────────────────
     const pend = pendingConfirms.get(chatId)
     if (pend) {
