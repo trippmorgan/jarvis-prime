@@ -187,7 +187,7 @@ Jarvis Prime commands four lieutenant nodes via SSH over Tailscale mesh:
 |------|---------|------------|------|
 | **Jarvis Prime** | SuperServer | localhost | General — orchestration, Telegram, main brain |
 | **Frank** | Voldemort (ROMED8-2T) | root@192.168.0.108 | Local AI — Ollama, GPU inference, dual-brain Gibson |
-| **Argus** | Mac Pro 5,1 | jarvisagent@100.70.105.85 | Network security, visual cortex |
+| **Argus** | Mac mini (Tripps-Mac-mini) | trippmorgan@argus-mini (100.108.116.72) | Network security, visual cortex |
 | **DJ Jarvis** | Pretoria (3630) | djjarvis@100.116.2.71 | Radio station (WPFQ) |
 | **Scalpel** | Precision T3600 | tripp@100.104.39.64 | Clinical ops, Athena EMR |
 

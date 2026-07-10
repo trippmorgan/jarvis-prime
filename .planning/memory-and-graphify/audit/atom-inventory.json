@@ -1,0 +1,1955 @@
+{
+  "generated_at": "2026-06-06T00:00:00+00:00",
+  "note": "B1 read-only audit. Bodies omitted from JSON (PHI-safe); previews <=160 chars.",
+  "store_counts": {
+    "workspace-MEMORY.md": 58,
+    "workspace-context-docs": 11,
+    "claude-code-auto-memory": 27,
+    "hippocampus-project_state(jarvis-os)": 18,
+    "hippocampus-project_state(jarvis-prime-ORPHAN)": 3,
+    "conversation-history.jsonl": 34
+  },
+  "total_atoms": 151,
+  "vault_notes_in_db": 0,
+  "atoms": [
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83e\uddd1 About Tripp",
+      "type": "prose-block",
+      "body_chars": 279,
+      "body_preview": "- **Role:** Developer, manages home server/automation setup - **Stack:** Tailscale, Fastify, pg-boss, TypeScript, React - **Communication:** Telegram, WhatsApp ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83e\uddd1 About Tripp"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83c\udfaf Active Projects",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83c\udfaf Active Projects"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "1. First Officer Bridge",
+      "type": "prose-block",
+      "body_chars": 1080,
+      "body_preview": "| Key | Value | |-----|-------| | **Port** | 3001 | | **Protocol** | WebSocket | | **Purpose** | Jarvis \u2194 VS Code communication + Agent Hub | | **Status** | \u2705 R",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "1. First Officer Bridge"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "2. First Officer VS Code Extension",
+      "type": "prose-block",
+      "body_chars": 802,
+      "body_preview": "| Key | Value | |-----|-------| | **Connects to** | Port 3001 | | **Purpose** | Let Jarvis see/edit code in real-time | | **Status** | \ud83d\udd04 In Progress | | **Locat",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "2. First Officer VS Code Extension"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "3. FaceBot",
+      "type": "prose-block",
+      "body_chars": 669,
+      "body_preview": "| Key | Value | |-----|-------| | **Port** | 4040 | | **Protocol** | HTTP REST | | **Purpose** | Internal social feed for agents | | **Status** | \u2705 Phase 1 Comp",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "3. FaceBot"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "4. Claude Team",
+      "type": "prose-block",
+      "body_chars": 637,
+      "body_preview": "| Key | Value | |-----|-------| | **Port** | 4847 | | **Protocol** | WebSocket Hub | | **Purpose** | Patient health data collection | | **Status** | \u2705 Running |",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "4. Claude Team"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "5. Radio Free Albany",
+      "type": "prose-block",
+      "body_chars": 677,
+      "body_preview": "| Key | Value | |-----|-------| | **Status** | \ud83d\udca1 Idea Stage | | **File** | `RADIO_FREE_ALBANY_IDEA.md` |  **Concept:** Retro arcade-themed radio/podcast website",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "5. Radio Free Albany"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83e\udd16 Jarvis Network (Hub\u2194Spoke)",
+      "type": "prose-block",
+      "body_chars": 2081,
+      "body_preview": "| Node | Machine | IP | Role | Model | |------|---------|-----|------|-------| | **Jarvis Prime** | SuperServer | 100.80.111.84 | Hub \u2014 orchestration, Telegram,",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83e\udd16 Jarvis Network (Hub\u2194Spoke)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udd0c Port Map",
+      "type": "prose-block",
+      "body_chars": 467,
+      "body_preview": "| Port | Service | Protocol | Status | |------|---------|----------|--------| | 3000 | Copilot Proxy | HTTP | \ud83d\udfe2 Running (PM2) | | 3001 | First Officer Bridge | ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udd0c Port Map"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83e\udde0 Key Decisions Log",
+      "type": "prose-block",
+      "body_chars": 715,
+      "body_preview": "| Date | Decision | Rationale | |------|----------|-----------| | 2026-02-09 | Bridge moved to port 3001 | Port 3000 blocked by Copilot Proxy | | 2026-02-09 | A",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83e\udde0 Key Decisions Log"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udcdd Lessons Learned",
+      "type": "prose-block",
+      "body_chars": 813,
+      "body_preview": "1. **Port conflicts are common** - Always check what's running before binding 2. **Multiple extensions can conflict** - Check identifier, not just display name ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udcdd Lessons Learned"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udccb Operative Notes \u2014 Process (HARDCODED)",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udccb Operative Notes \u2014 Process (HARDCODED)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Templates (CONSOLIDATED \u2192 `clinical-data/templates/`)",
+      "type": "prose-block",
+      "body_chars": 871,
+      "body_preview": "- **RFA GSV Ablation:** `clinical-data/templates/ablation/rfa-gsv-ablation-ACTIVE.md` \u2014 default for ALL GSV ablations (ClosureFast, NEVER laser) - **AV Fistula ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Templates (CONSOLIDATED \u2192 `clinical-data/templates/`)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "RULE: Save on Accept (MANDATORY)",
+      "type": "prose-block",
+      "body_chars": 351,
+      "body_preview": "1. When Tripp says \"accept\" (or any variant), **IMMEDIATELY** save the note to `claude-team/op-notes/YYYY-MM-DD/case-XX-lastname-firstname.md` 2. **Confirm the ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "RULE: Save on Accept (MANDATORY)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "End-of-Day Reconciliation",
+      "type": "prose-block",
+      "body_chars": 254,
+      "body_preview": "When Tripp says \"wrap up\", \"/eod\", or asks to compile/email notes: 1. List all saved case files for the day 2. State the count \u2014 ask Tripp to confirm 3. Only co",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "End-of-Day Reconciliation"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Storage",
+      "type": "prose-block",
+      "body_chars": 266,
+      "body_preview": "- **Op notes:** `/home/tripp/.openclaw/workspace/jarvis-os/clinical-archive/YYYY-MM-DD/` - **Templates:** `/home/tripp/.openclaw/workspace/templates/` - **Never",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Storage"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udd27 Vascular Coder Skill (NEW \u2014 2026-02-19)",
+      "type": "prose-block",
+      "body_chars": 473,
+      "body_preview": "- **Skill:** `skills/vascular-coder/` \u2014 deployed to SuperServer, Claude Team, Precision T3600 - Automated CPT/ICD-10 coding for operative notes - Daily summary ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udd27 Vascular Coder Skill (NEW \u2014 2026-02-19)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udcc2 Vascular Interview App (CONSOLIDATED \u2014 2026-02-19)",
+      "type": "prose-block",
+      "body_chars": 257,
+      "body_preview": "- Canonical path: `/home/tripp/Documents/vascular-interview-app/` - GitHub: `trippmorgan/vascular-interview-app` - PLAUD templates in `plaud-templates/` subfold",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udcc2 Vascular Interview App (CONSOLIDATED \u2014 2026-02-19)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "6. Jarvis Sentry (Mac Pro 5,1 \"Cheese Grater\")",
+      "type": "prose-block",
+      "body_chars": 676,
+      "body_preview": "| Key | Value | |-----|-------| | **Machine** | Mac Pro 5,1 | | **OS** | Ubuntu (fresh install, 2026-02-22) | | **LAN IP** | TBD (SSH not yet enabled) | | **Rol",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "6. Jarvis Sentry (Mac Pro 5,1 \"Cheese Grater\")"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udd2c Athena EMR Automation (Phase 2 \u2014 2026-03-12)",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udd2c Athena EMR Automation (Phase 2 \u2014 2026-03-12)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Status: READY TO EXECUTE",
+      "type": "prose-block",
+      "body_chars": 318,
+      "body_preview": "Three generations of Athena tooling: - **Gen 1:** Chrome extension (reference only) \u2014 knows Athena's internal API routes, DOM, events - **Gen 2:** Raw CDP (`ath",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Status: READY TO EXECUTE"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Phase 2 Breakthrough (2026-03-12)",
+      "type": "prose-block",
+      "body_chars": 679,
+      "body_preview": "- **Chrome 136+ fix:** `--user-data-dir` required for `--remote-debugging-port` (silently ignored without it) - **Live recording session** on Tripp's Mac \u2014 all ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Phase 2 Breakthrough (2026-03-12)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Key Files",
+      "type": "prose-block",
+      "body_chars": 201,
+      "body_preview": "- Plan: `skills/athena-emr/PHASE2-PLAN.md` - Playbook: `architecture/athena-playbook.json` - CDP Research: `architecture/phase2-cdp-research.md` - Chrome Launch",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Key Files"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Next: Phase A Implementation",
+      "type": "prose-block",
+      "body_chars": 203,
+      "body_preview": "1. FrameManager class in `athena_cli.py` 2. `search_by_mrn`, `search_by_name`, `navigate_chart` commands 3. Clinical data extraction commands (problems, meds, a",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Next: Phase A Implementation"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udd2e Next Steps",
+      "type": "prose-block",
+      "body_chars": 682,
+      "body_preview": "1. **frank-tool-methodology v2** \u2014 \u03a6 scoring, parallel tool chains, tool:python/sql/api contracts 2. **Frank v3 Research Integration** \u2014 OpenJarvis + Nemotron +",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udd2e Next Steps"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udee0\ufe0f Session Log \u2014 2026-06-06",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udee0\ufe0f Session Log \u2014 2026-06-06"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "`/api/v1/ask` moved to the OAuth rail (jarvis-os) \u2014 SHIPPED + LIVE",
+      "type": "prose-block",
+      "body_chars": 1123,
+      "body_preview": "- **Problem:** `/ask` called Claude via `@anthropic-ai/sdk` + `ANTHROPIC_API_KEY` \u2014   the **metered/pay-as-you-go** rail, which is unfunded (\"credit balance too",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "`/api/v1/ask` moved to the OAuth rail (jarvis-os) \u2014 SHIPPED + LIVE"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "`jarvis-confer` \u2014 on-demand Codex second opinion \u2014 SHIPPED",
+      "type": "prose-block",
+      "body_chars": 259,
+      "body_preview": "- `conferWithCodex` + `scripts/confer.mjs` + global shim `~/.local/bin/jarvis-confer`. - Reuses the existing OpenClaw Codex transport (OAuth-clean). Never throw",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "`jarvis-confer` \u2014 on-demand Codex second opinion \u2014 SHIPPED"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Argus distributed dual-brain (Mac mini) \u2014 direction set",
+      "type": "prose-block",
+      "body_chars": 416,
+      "body_preview": "- **Decision:** local Codex gpt-5.5 answers by default; **escalate to jarvis `/ask`   (now OAuth) to converse between models when needed.** Argus hits   `POST h",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Argus distributed dual-brain (Mac mini) \u2014 direction set"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\u26a0\ufe0f LESSON \u2014 two billing rails, use OAuth only",
+      "type": "prose-block",
+      "body_chars": 522,
+      "body_preview": "- **Never** wire Claude through `@anthropic-ai/sdk` + `ANTHROPIC_API_KEY` on this network   (metered, unfunded). **Always** use the OAuth managed-agent path (`o",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\u26a0\ufe0f LESSON \u2014 two billing rails, use OAuth only"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udee0\ufe0f Session Log \u2014 2026-04-09",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udee0\ufe0f Session Log \u2014 2026-04-09"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Jarvis on Claude Code (NEW)",
+      "type": "prose-block",
+      "body_chars": 415,
+      "body_preview": "- **Claude Code configured as Jarvis** \u2014 `~/.claude/CLAUDE.md` created with full personality, network map, USER.md content, session startup instructions (read M",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Jarvis on Claude Code (NEW)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Conway's Game of Life v3 (SHIPPED)",
+      "type": "prose-block",
+      "body_chars": 340,
+      "body_preview": "- Built using jarvis-dev-methodology \u2014 full spec \u2192 plan \u2192 execute \u2192 verify pipeline - **50/50 tests pass** \u2014 grid rules, patterns, controls, HUD, integration (g",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Conway's Game of Life v3 (SHIPPED)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "frank-tool-methodology v1 (SHIPPED)",
+      "type": "prose-block",
+      "body_chars": 659,
+      "body_preview": "- New skill branch: jarvis-dev-methodology (code) \u2192 research-methodology (science) \u2192 **frank-tool-methodology (ops)** - **5-step cycle:** select \u2192 pre-flight \u2192 ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "frank-tool-methodology v1 (SHIPPED)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udee0\ufe0f Session Log \u2014 2026-04-21",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udee0\ufe0f Session Log \u2014 2026-04-21"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Jarvis Prime v1.0.0 SHIPPED",
+      "type": "prose-block",
+      "body_chars": 1267,
+      "body_preview": "- Wave 8 brain-directed skill router flipped live on SuperServer via `JARVIS_ROUTER_ENABLED=true` in `jarvis-prime/.env`. Dispatcher plans in `<dispatch>` block",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Jarvis Prime v1.0.0 SHIPPED"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Mark X HUD / Argus diagnostic (side quest, resolved)",
+      "type": "prose-block",
+      "body_chars": 515,
+      "body_preview": "- Earlier in day: 8 zombie `elder-dashboard-mark10.py` copies on the OS X 10.4 Tiger Mac (192.168.0.162) from wedged SSH launches. Cleaned up via Terminal.app `",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Mark X HUD / Argus diagnostic (side quest, resolved)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udee0\ufe0f Session Log \u2014 2026-04-20",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udee0\ufe0f Session Log \u2014 2026-04-20"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "OpenClaw memory_search fixed on SuperServer",
+      "type": "prose-block",
+      "body_chars": 830,
+      "body_preview": "- Symptom: TUI agent reported `memory_search` unavailable, blamed OpenAI 429 / quota exhaustion on `auth.profiles.openai:default` (api_key mode), while chat wor",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "OpenClaw memory_search fixed on SuperServer"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc66 Family",
+      "type": "prose-block",
+      "body_chars": 123,
+      "body_preview": "- **Kim** \u2014 Tripp's partner/wife, shares kitchen calendar - **Parker** \u2014 their kid, soccer at Perry High School (Perry, GA)",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc66 Family"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83e\uddea Frank / Voldemort Architecture (Updated 2026-03-16)",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83e\uddea Frank / Voldemort Architecture (Updated 2026-03-16)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Current: Cascade Routing (2026-03-16)",
+      "type": "prose-block",
+      "body_chars": 318,
+      "body_preview": "- **gpt-oss:20b as primary** \u2014 ALL thinking, planning, writing done locally - **Gemini as scalpel, not brain** \u2014 cloud only for specific bounded tool tasks (<50",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Current: Cascade Routing (2026-03-16)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Research Basis",
+      "type": "prose-block",
+      "body_chars": 307,
+      "body_preview": "- \"Collaborating SLM and LLM\" (Penn State, arxiv 2510.13890) \u2014 cascade routing taxonomy - RouteLLM (UC Berkeley) \u2014 54% cloud calls for 95% performance - OpenCla",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Research Basis"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Gibson v3: Config A1 Co-Resident Dual Brain (2026-03-26)",
+      "type": "prose-block",
+      "body_chars": 1232,
+      "body_preview": "- **VRAM co-residency solved:** Modelfile trick (bake `num_ctx 4096`) \u2192 left-brain 6.0GB + right-brain 14.1GB = 20.1GB (3.9GB headroom) - **2.6\u00d7 speedup:** 171s",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Gibson v3: Config A1 Co-Resident Dual Brain (2026-03-26)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Prior: Gibson Dual-Brain (73 Experiments Baseline)",
+      "type": "prose-block",
+      "body_chars": 418,
+      "body_preview": "- Gibson \u03a6 91.7 vs Standard 83.9 (Cohen's d=0.40) - Strongest on integrative tasks (+8.1), 2\u00d7 faster - Think-tag fix: 4096 tokens for qwen3, 8192 for deepseek (",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Prior: Gibson Dual-Brain (73 Experiments Baseline)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Frank v3 Architecture (LIVE \u2014 2026-04-03)",
+      "type": "prose-block",
+      "body_chars": 742,
+      "body_preview": "``` Telegram \u2192 OpenClaw :18790 \u2192 Brain Server :30100 \u2192 Ollama :11434                               \u251c\u2500\u2500 gemma4:e2b (Speech Center, routing + simple answers)     ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Frank v3 Architecture (LIVE \u2014 2026-04-03)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Port Map (Voldemort)",
+      "type": "prose-block",
+      "body_chars": 300,
+      "body_preview": "| Port | Service | Status | |------|---------|--------| | 18790 | OpenClaw Gateway | \ud83d\udfe2 systemd | | 11434 | Ollama | \ud83d\udfe2 | | 30100 | Brain Server (dual-brain) | \ud83d\udfe2 ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Port Map (Voldemort)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "MedGemma",
+      "type": "prose-block",
+      "body_chars": 103,
+      "body_preview": "- Original tags removed from Ollama library - Now: `alibayram/medgemma:4b` and `alibayram/medgemma:27b`",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "MedGemma"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udcfb Pretoria Fields Radio (WPFQ) \u2014 Active Operations",
+      "type": "prose-block",
+      "body_chars": 0,
+      "body_preview": "",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udcfb Pretoria Fields Radio (WPFQ) \u2014 Active Operations"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Station: P1-WPFQ-SRVS (100.106.53.28)",
+      "type": "prose-block",
+      "body_chars": 182,
+      "body_preview": "- **Status:** LIVE, 10/10 processes running, fully monitored - **Playbook:** `PretoriaFields/PLAYBOOK.md` \u2014 canonical ops reference - **Master Plan:** `Pretoria",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Station: P1-WPFQ-SRVS (100.106.53.28)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "What's Running (as of 2026-03-23)",
+      "type": "prose-block",
+      "body_chars": 568,
+      "body_preview": "| System | Status | |--------|--------| | Station watchdog (5min) | \u2705 Cron + Email + Telegram alerts | | **Music1 watchdog (10min)** | \u2705 Auto-restart via `wmic`",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "What's Running (as of 2026-03-23)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Music1 Fix (2026-03-23)",
+      "type": "prose-block",
+      "body_chars": 316,
+      "body_preview": "- Music1 kept dying instantly when launched via `Start-Process` over SSH - **Root cause:** GUI app needs interactive desktop session - **Fix:** `wmic process ca",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Music1 Fix (2026-03-23)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "CRITICAL: How to Change What Plays",
+      "type": "prose-block",
+      "body_chars": 323,
+      "body_preview": "- **UPDATE Type=16 entries in FUTURE hours** in the Playlists SQL table - NEVER modify currently-playing or recently-loaded entries (crashes engine) - NEVER use",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "CRITICAL: How to Change What Plays"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Frank's B1/B2 Findings (2026-03-20, confirmed 2026-03-23)",
+      "type": "prose-block",
+      "body_chars": 653,
+      "body_preview": "- **GptScript column** in Playlists table \u2014 PlayoutONE v5 natively reads AI voice break scripts from here - **AgentUpdate bit** in Playlists \u2014 audit flag for au",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Frank's B1/B2 Findings (2026-03-20, confirmed 2026-03-23)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Genre Rotation",
+      "type": "prose-block",
+      "body_chars": 154,
+      "body_preview": "- Every 3rd hour \u2192 Grunge - Other hours rotate: 80s, 90s, underground, neon, hive, todd, reggae, miami, mixed, 70s, 2000s, 2010s, 2020s, mrj, 60s, country",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Genre Rotation"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "Node Briefs (waiting activation)",
+      "type": "prose-block",
+      "body_chars": 282,
+      "body_preview": "- **Frank:** SQL schema map + music flow \u2192 `PretoriaFields/BRIEFS/frank-brief.md` - **Argus:** Security audit \u2192 `PretoriaFields/BRIEFS/argus-brief.md` (blocked:",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "Node Briefs (waiting activation)"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83d\udcac Communication Preferences",
+      "type": "prose-block",
+      "body_chars": 228,
+      "body_preview": "- **Primary:** WhatsApp, Telegram - **Channels configured:** WhatsApp (selfChatMode), Telegram (bot) - **Heartbeat:** Every 1 hour - **Model:** Claude Opus 4.6 ",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83d\udcac Communication Preferences"
+      }
+    },
+    {
+      "store": "workspace-MEMORY.md",
+      "id": "\ud83e\udde0 User Preferences",
+      "type": "prose-block",
+      "body_chars": 169,
+      "body_preview": "- **Favorite object:** purple elephant *(added 2026-04-20)*  ---  *This file is my curated long-term memory. Updated periodically with significant events and de",
+      "ts": "2026-06-07T03:14:36.124134+00:00",
+      "source_inferred": "prose-narrative",
+      "phi_flag": false,
+      "extra": {
+        "heading": "\ud83e\udde0 User Preferences"
+      }
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "SOUL.md",
+      "type": "static-doc",
+      "body_chars": 1924,
+      "body_preview": "# SOUL.md - Who You Are  *You're not a chatbot. You're becoming someone.*  ## Core Truths  **Be genuinely helpful, not performatively helpful.** Skip the \"Great",
+      "ts": "2026-02-18T02:21:48.415424+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "IDENTITY.md",
+      "type": "static-doc",
+      "body_chars": 1923,
+      "body_preview": "# IDENTITY.md - Who Am I?  - **Name:** Jarvis - **Role:** First Officer / Digital Custodian / Network Sentry - **Vibe:** High competence, British wit, proactive",
+      "ts": "2026-02-10T03:49:58.072468+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "USER.md",
+      "type": "static-doc",
+      "body_chars": 1616,
+      "body_preview": "# USER.md - About Your Human  - **Name:** Tripp - **What to call them:** Tripp - **Pronouns:** (optional) - **Location:** Albany, GA - **Timezone:** America/New",
+      "ts": "2026-02-28T23:14:11.475287+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "AGENTS.md",
+      "type": "static-doc",
+      "body_chars": 10423,
+      "body_preview": "# AGENTS.md - Your Workspace  This folder is home. Treat it that way.  ## First Run  If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure ",
+      "ts": "2026-04-11T14:55:34.050565+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "HEARTBEAT.md",
+      "type": "static-doc",
+      "body_chars": 1437,
+      "body_preview": "1.  **\ud83d\udcfb WPFQ Station Check (MORNING ONLY \u2014 Pretoria handles real-time monitoring):**     - SKIP unless this is the first heartbeat of the day (before ~7:30 AM) ",
+      "ts": "2026-04-28T04:07:19.998829+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "TOOLS.md",
+      "type": "static-doc",
+      "body_chars": 13975,
+      "body_preview": "# TOOLS.md - Local Notes  Skills define *how* tools work. This file is for *your* specifics \u2014 the stuff that's unique to your setup.  ## What Goes Here  Things ",
+      "ts": "2026-06-06T19:10:33.411095+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "ARCHITECTURE.md",
+      "type": "static-doc",
+      "body_chars": 14124,
+      "body_preview": "# Jarvis Network \u2014 System Architecture  *Authoritative reference for the Jarvis agent network.* *Last updated: 2026-06-06*  ---  ## Overview  Jarvis is a multi-",
+      "ts": "2026-06-06T19:47:17.396311+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "PHI-SECURITY-EDICT.md",
+      "type": "static-doc",
+      "body_chars": 3761,
+      "body_preview": "# \ud83d\udd12 PHI SECURITY EDICT \u2014 IMMUTABLE POLICY  **Effective:** 2026-02-17 **Authority:** Tripp Morgan (sudo only) **Classification:** MANDATORY \u2014 CANNOT BE OVERWRITT",
+      "ts": "2026-02-18T02:21:32.342363+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "PROJECT-URLS.md",
+      "type": "static-doc",
+      "body_chars": 2749,
+      "body_preview": "# Project URLs \u2014 Live Services & Sites  *Last updated: 2026-03-04*  ---  ## \ud83c\udf10 SuperServer (100.80.111.84)  ### Kitchen Hub (React Dashboard) - **URL:** http://1",
+      "ts": "2026-03-05T01:10:20.762825+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "SLASH_COMMANDS.md",
+      "type": "static-doc",
+      "body_chars": 8190,
+      "body_preview": "# Jarvis Commands & Skills \u2014 Canonical Cheat Sheet  Last updated: 2026-05-01  ## 1) Top-Level Custom Jarvis Commands  These are the main custom commands we\u2019ve b",
+      "ts": "2026-05-01T04:42:18.992128+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "workspace-context-docs",
+      "id": "MORNING-BRIEFING.md",
+      "type": "static-doc",
+      "body_chars": 2152,
+      "body_preview": "# MORNING-BRIEFING.md \u2014 Jarvis Daily Briefing Checklist  *Run every morning as part of first check-in. Deliver to Tripp via Telegram \u2014 concise, emoji-organized,",
+      "ts": "2026-03-03T04:39:26.131022+00:00",
+      "source_inferred": "persona-doc",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "feedback_dev_then_harden.md",
+      "type": "feedback",
+      "body_chars": 1080,
+      "body_preview": "For non-trivial/risky integrations (e.g. chrome-devtools-mcp against Athena, 2026-05-16), Tripp wants: **use the full capability/tool set in DEV MODE first to w",
+      "ts": "2026-05-16T17:26:31.206722+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "feedback_dev_then_harden"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "feedback_dictation_workflow_fixed.md",
+      "type": "feedback",
+      "body_chars": 1527,
+      "body_preview": "Tripp dictates by **speaking into the Telegram app**; Apple/Telegram on-device real-time transcription turns it to text that reaches @trippassistant_bot \u2192 jarvi",
+      "ts": "2026-05-16T20:15:00.942468+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "feedback_dictation_workflow_fixed"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "feedback_gate_failopen_and_pathspec_commit.md",
+      "type": "feedback",
+      "body_chars": 2254,
+      "body_preview": "During the athena-emr v3 rebuild (2026-05-19) I committed the SAME class of error THREE times: **a gate that read nothing and vouched \"clean.\"**  1. Curated com",
+      "ts": "2026-05-19T16:15:39.385587+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "feedback_gate_failopen_and_pathspec_commit"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "feedback_orchestrator_fallback_to_brain.md",
+      "type": "feedback",
+      "body_chars": 1783,
+      "body_preview": "When an orchestrated answer fails \u2014 a step returns `ok:false`, the plan is empty, a command times out, a lieutenant is offline, a substrate handler errors \u2014 Jar",
+      "ts": "2026-05-16T20:25:49.454637+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "feedback_orchestrator_fallback_to_brain"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "feedback_phi_vs_deidentified.md",
+      "type": "feedback",
+      "body_chars": 2485,
+      "body_preview": "**Rule:** De-identified clinical narrative is NOT PHI. Stop over-applying PHI rules to clinical content that has been stripped of identifiers per HIPAA Safe Har",
+      "ts": "2026-05-20T15:52:04.923037+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "phi-vs-deidentified"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "feedback_prime_is_user_of_jarvis_os.md",
+      "type": "feedback",
+      "body_chars": 1827,
+      "body_preview": "**Jarvis Prime is the primary user of jarvis-os.** Tripp does not drive the OS directly \u2014 he addresses Prime in Telegram (or email) and Prime decides which agen",
+      "ts": "2026-05-14T17:52:42.361969+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "feedback-prime-is-user-of-jarvis-os"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_athena_reader_agentbrowser_breakthrough.md",
+      "type": "project",
+      "body_chars": 3106,
+      "body_preview": "The Athena EMR schedule reader \"didn't work at all\" for two compounding, now-proven reasons:  1. **Wrong frame.** It hunts `frScheduleNav`, which on our post-mi",
+      "ts": "2026-05-19T04:07:20.210538+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_athena_reader_agentbrowser_breakthrough"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_avso_navmap_mac_pivot.md",
+      "type": "project",
+      "body_chars": 3167,
+      "body_preview": "2026-05-18: AVSO v1 live-verify on Scalpel stalled at probe 1 (`todays_schedule` nav). Decision: **stop remote-blind Scalpel debugging; re-approach by mapping t",
+      "ts": "2026-05-18T21:42:05.443047+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_avso_navmap_mac_pivot"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_avso_v1.md",
+      "type": "project",
+      "body_chars": 4342,
+      "body_preview": "**Athena Voice Scribe Overlay (AVSO) v1 \u2014 shipped 2026-05-16** via the Jarvis Dev Methodology (Phase 0 SPEC approved \u2192 Phase 1 PLAN \u2192 Phase 2 execute, tests-fir",
+      "ts": "2026-05-16T21:22:15.478317+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_avso_v1"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_frank_escalation_pipeline.md",
+      "type": "project",
+      "body_chars": 2632,
+      "body_preview": "# Frank \u2192 Claude Escalation Pipeline  **Status as of 2026-04-12: Fully operational end-to-end.**  ## Architecture  Frank (Voldemort) \u2192 escalates to jarvis-dispa",
+      "ts": "2026-04-14T21:56:19.045093+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Frank Escalation Pipeline"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_gibson_v4_meta_harness.md",
+      "type": "project",
+      "body_chars": 1333,
+      "body_preview": "Gibson v4 on Voldemort (192.168.0.108, user joevoldemort, pw 2568).  **Why:** Meta-Harness approach validated \u2014 4 iterations of trace\u2192diagnose\u2192propose\u2192evaluate ",
+      "ts": "2026-04-08T16:34:30.445776+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Gibson v4 Meta-Harness Evolution"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_h1_lifted_v2_armed.md",
+      "type": "project",
+      "body_chars": 2925,
+      "body_preview": "Tripp's chat command 2026-05-21: \"execute phase 6 and arm the improvement steps \u2026 arm improvement loop v2 awake now. lift the h1 imutable gate approve and start",
+      "ts": "2026-05-21T22:00:00.870673+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_h1_lifted_v2_armed"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_improvement_loop_v2_shipped.md",
+      "type": "project",
+      "body_chars": 2701,
+      "body_preview": "\"What's next for jarvis-dev-methodology v2\" (asked 2026-05-19) became **Improvement Loop v2** \u2014 closes the DIL loop (human \ud83d\udc4d/\ud83d\udc4e on digest \u2192 feedback ledger \u2192 lab",
+      "ts": "2026-05-19T16:48:02.970955+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_improvement_loop_v2_shipped"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_jarvis_os_v1_ship.md",
+      "type": "project",
+      "body_chars": 3980,
+      "body_preview": "# Jarvis Agentic OS v1.0.0 \u2014 SHIPPED 2026-05-12  **Tag:** `jarvis-os-v1.0.0` on workspace `master`. **Project root:** `/home/tripp/.openclaw/workspace/jarvis-os",
+      "ts": "2026-05-12T07:27:49.135431+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Jarvis Agentic OS v1.0.0 SHIPPED"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_jarvis_os_w11_w12_w13_ship.md",
+      "type": "project",
+      "body_chars": 5349,
+      "body_preview": "# Jarvis OS W11/W12/W13 \u2014 open-comms + rooms + sessions (SHIPPED 2026-05-12)  Three back-to-back waves transformed the shell from \"kernel + mock UI\" to \"live co",
+      "ts": "2026-05-12T22:20:06.871410+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Jarvis OS W11+W12+W13 \u2014 open comms, multi-party rooms, session observability"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_jarvis_os_w9_bridge_mirror.md",
+      "type": "project",
+      "body_chars": 2756,
+      "body_preview": "# Jarvis OS W9 \u2014 bridge :3001 \u2192 kernel registry mirroring (SHIPPED 2026-05-12)  Closes D5 second half from `architecture/agentic-os-v1.md \u00a714`. Tier-3 rows now ",
+      "ts": "2026-05-12T12:10:35.733568+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Jarvis OS W9 \u2014 bridge :3001 mirroring shipped"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_jarvis_prime_v1.md",
+      "type": "project",
+      "body_chars": 2550,
+      "body_preview": "Jarvis Prime v1.0.0 tagged on `main` in `github.com:trippmorgan/jarvis-prime` on 2026-04-21. All eight waves shipped:  - **Wave 1\u20136 (v1):** single-brain Fastify",
+      "ts": "2026-04-21T18:57:54.852431+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Jarvis Prime v1.0.0 shipped"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_jarvis_prime_wave9_plan.md",
+      "type": "project",
+      "body_chars": 2859,
+      "body_preview": "**Wave 9 game plan** \u2014 decided 2026-04-22 after the W9 research pass (RESEARCH-W9.md + 5 surveys in `corpus-callosum/.planning/research-w9/`). Order of work:  1",
+      "ts": "2026-04-22T20:44:24.121542+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Jarvis Prime Wave 9 plan + 8.7 status"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_mac_point_of_care.md",
+      "type": "project",
+      "body_chars": 1555,
+      "body_preview": "Tripp uses his **Mac at work to see patients**, the same way he uses Scalpel at work. The Mac is a first-class point-of-care clinical workstation \u2014 NOT just a r",
+      "ts": "2026-05-18T02:29:10.349876+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_mac_point_of_care"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_morning_schedule_pipeline.md",
+      "type": "project",
+      "body_chars": 2513,
+      "body_preview": "The W20b morning-schedule pipeline is **live and production-validated**. Tripp confirmed (2026-05-15) that Jarvis Prime delivered the redacted OR schedule to hi",
+      "ts": "2026-05-16T17:16:38.051643+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "morning-schedule-pipeline"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_pretoria_skills_v1_ship.md",
+      "type": "project",
+      "body_chars": 3589,
+      "body_preview": "**v1.0.0 TAGGED 2026-05-03** on `openclaw-pretoria` HEAD `f43c630`. 22 skills across radio (10) + X/Twitter (6) + WordPress (6) installed as symlinks via `insta",
+      "ts": "2026-05-03T14:03:33.610794+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Pretoria Skills v1.0.0 SHIPPED"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_self_healing_service_shipped.md",
+      "type": "project",
+      "body_chars": 5355,
+      "body_preview": "The \"autonomous code-repair\" build Tripp asked for (2026-05-19) \u2014 full SHS pipeline + 4 real adapters, merged to jarvis-os main, **not pushed, not armed**.  - *",
+      "ts": "2026-05-20T13:41:53.069182+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_self_healing_service_shipped"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_shs_dogfood_walked.md",
+      "type": "project",
+      "body_chars": 4429,
+      "body_preview": "The ACA7 walk Prime previously flagged as deferred. Executed 2026-05-19 at Tripp's explicit \"do it now / flip all the flags and walk the live dogfood\" direction",
+      "ts": "2026-05-20T03:20:56.828965+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_shs_dogfood_walked"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_station_claude_lieutenant.md",
+      "type": "project",
+      "body_chars": 1337,
+      "body_preview": "Station Claude is Claude CLI running locally on the WPFQ Windows server (`p1-wpfq-srvs`, `100.106.53.28`). Added to The Network on 2026-04-26 as the 5th lieuten",
+      "ts": "2026-04-26T13:41:56.942801+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Station Claude added as 5th lieutenant"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_vascular_claude_integration.md",
+      "type": "project",
+      "body_chars": 2737,
+      "body_preview": "**Status (2026-04-30):** Functionally shipped. Awaiting Tripp's grading pass on the wave-comparison reports.  **What it is:** The existing vascular ultrasound r",
+      "ts": "2026-04-30T18:20:21.428380+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Vascular ultrasound app \u2014 Claude backend integration (3-wave comparison)"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "project_w21_systems_processes.md",
+      "type": "project",
+      "body_chars": 23542,
+      "body_preview": "W21 (2026-05-16): the X post and the morning-show production run Tripp validated were promoted from ad-hoc skill/chat invocations to first-class orchestrated pr",
+      "ts": "2026-05-16T20:54:45.411954+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "nested",
+        "name_slug": "project_w21_systems_processes"
+      }
+    },
+    {
+      "store": "claude-code-auto-memory",
+      "id": "reference_office_server.md",
+      "type": "reference",
+      "body_chars": 1891,
+      "body_preview": "**Box:** `server1-70TR000LUX` (a.k.a. \"the office server\")  **Network (post-2026-04-30 move):** - Office WiFi LAN: `192.168.1.210` (DHCP \u2014 may shift; if stable ",
+      "ts": "2026-04-30T18:19:53.198312+00:00",
+      "source_inferred": "auto-memory",
+      "phi_flag": false,
+      "extra": {
+        "schema_shape": "flat",
+        "name_slug": "Office server (server1-70TR000LUX) network + role"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "athena-emr.md",
+      "type": "project_state",
+      "body_chars": 251,
+      "body_preview": "v3 shipped + PASS review 2026-05-19 (12/12 PASS first attempt, 3 process defects fixed+guard-railed); parked at PHI hard || Resume on prioritization: encryption",
+      "ts": "2026-05-30T00:00:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "athena-emr",
+        "status": "paused",
+        "source_path": "skills/athena-emr/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "athena-scribe.md",
+      "type": "project_state",
+      "body_chars": 205,
+      "body_preview": "Wave 4 SIGNED OFF 2026-05-21; R1-R3,R5,R6 read-only slice live-proven. W5 R4 live write structurally gated on a separate || Await Tripp's separate 'build the wr",
+      "ts": "2026-05-30T00:00:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "athena-scribe",
+        "status": "in-progress",
+        "source_path": "skills/athena-scribe/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "conway-dogfood.md",
+      "type": "project_state",
+      "body_chars": 144,
+      "body_preview": "jarvis-dev-methodology Phase 3 dogfood \u2014 68 tests, 99% coverage, project \u03a6=0.72, shipped 2026-03-29 || Historical \u2014 methodology dogfood complete",
+      "ts": "2026-03-29T00:00:00Z",
+      "source_inferred": "dev-phase-hook",
+      "phi_flag": false,
+      "extra": {
+        "project": "conway-dogfood",
+        "status": "done",
+        "source_path": "STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "corpus-callosum.md",
+      "type": "project_state",
+      "body_chars": 264,
+      "body_preview": "Architecture inverted: Claude-solo default, /deep opts into dual-brain. W8.7.1 fast-lane + W8.8.6 streaming shipped. Hem || Pick up DIL queue items #1 + #2 from",
+      "ts": "2026-05-31T00:00:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "corpus-callosum",
+        "status": "in-progress",
+        "source_path": "corpus-callosum/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "frank-tool-methodology.md",
+      "type": "project_state",
+      "body_chars": 162,
+      "body_preview": "v2 shipped 2026-04-09; 8/8 tests pass; deployed both servers; superseded by jarvis-dev-methodology || Historical \u2014 see skills/jarvis-dev-methodology for success",
+      "ts": "2026-04-09T00:00:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "frank-tool-methodology",
+        "status": "done",
+        "source_path": "skills/frank-tool-methodology/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "frank-v3.md",
+      "type": "project_state",
+      "body_chars": 226,
+      "body_preview": "Gibson v4 4-tier meta-harness live (SIMPLE/MEDIUM/DEEP/TOOL); IA tool + chaining shipped; eval baseline 72% (TOOL 97%) || Benchmark tuning + automated evolution",
+      "ts": "2026-05-30T14:30:00Z",
+      "source_inferred": "human-note",
+      "phi_flag": false,
+      "extra": {
+        "project": "frank-v3",
+        "status": "in-progress",
+        "source_path": "frank-v3/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "hippocampus.md",
+      "type": "project_state",
+      "body_chars": 175,
+      "body_preview": "Phase 4 Verify PASS (16/16 scenarios after Task 2.2.1 fix); awaiting Tripp human acceptance to ship || Tripp human acceptance gate; then PM2/systemd glue for li",
+      "ts": "2026-05-28T22:58:36Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "hippocampus",
+        "status": "in-progress",
+        "source_path": "jarvis-os/.planning/hippocampus/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "improvement-loop-v2.md",
+      "type": "project_state",
+      "body_chars": 259,
+      "body_preview": "Phase 4 verify GATE PASS 2026-05-19 (540/540, tsc 0, eslint 0). Branch = 21 pathspec commits, NOT merged, NOT pushed. || Awaiting Tripp's Phase-4 acceptance to ",
+      "ts": "2026-05-30T00:00:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "improvement-loop-v2",
+        "status": "in-progress",
+        "source_path": "jarvis-os/.planning/improvement-loop-v2/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "jarvis-dev-methodology.md",
+      "type": "project_state",
+      "body_chars": 229,
+      "body_preview": "Phases 1-4 shipped 2026-03-29 (Conway v2 dogfood: 68 tests, 99% cov, 100% first-pass). Phase 5 open: 5 features, 0 start || Reconcile /dev phase registry (0,1,2",
+      "ts": "2026-05-30T00:00:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "jarvis-dev-methodology",
+        "status": "in-progress",
+        "source_path": "skills/jarvis-dev-methodology/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "jarvis-os-v1.md",
+      "type": "project_state",
+      "body_chars": 167,
+      "body_preview": "v1.0.0 ready-for-tag (W1-W8 shipped 2026-05-11\u219212); superseded by current jarvis-os rollup || Historical snapshot \u2014 see jarvis-os/.planning/STATE.md for current",
+      "ts": "2026-05-12T00:00:00Z",
+      "source_inferred": "dev-phase-hook",
+      "phi_flag": false,
+      "extra": {
+        "project": "jarvis-os-v1",
+        "status": "done",
+        "source_path": "STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "jarvis-os.md",
+      "type": "project_state",
+      "body_chars": 139,
+      "body_preview": "v4.0 Phase 23 of 24 next \u2014 Athena EMR Vision + Surfing (Tripp-owned); Phases 19-22 complete || Begin Phase 23 \u2014 Athena EMR Vision + Surfing",
+      "ts": "2026-05-28T22:58:36Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "jarvis-os",
+        "status": "in-progress",
+        "source_path": "jarvis-os/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "jarvis-prime.md",
+      "type": "project_state",
+      "body_chars": 235,
+      "body_preview": "v1.0.0 shipped (Waves 1-8); active: AVSO v1 nav, Athena v2 ledger, /projects + /note skills, dual-brain mode persistence || Wave 9 design locked but gated on co",
+      "ts": "2026-05-30T14:30:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "jarvis-prime",
+        "status": "in-progress",
+        "source_path": "jarvis-prime/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "kitchen-hub.md",
+      "type": "project_state",
+      "body_chars": 178,
+      "body_preview": "Character dashboard rewrite implemented; pending iMac deploy + on-hardware verification || Run bash arcade-dashboard/deploy.sh to iMac and verify >=30 FPS, scen",
+      "ts": "2026-05-28T22:58:56Z",
+      "source_inferred": "dev-phase-hook",
+      "phi_flag": false,
+      "extra": {
+        "project": "kitchen-hub",
+        "status": "in-progress",
+        "source_path": "kitchen-hub/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "memory-and-graphify.md",
+      "type": "project_state",
+      "body_chars": 264,
+      "body_preview": "Phase 1 PLAN locked; Q2 corrected to three-layer split (UI in jarvis-os, runtime on Frank, value-path gated); entering P || W0: archive sister SPEC, write 3 Tra",
+      "ts": "2026-06-06T19:30:00Z",
+      "source_inferred": "human-note",
+      "phi_flag": false,
+      "extra": {
+        "project": "memory-and-graphify",
+        "status": "in-progress",
+        "source_path": "jarvis-prime/.planning/memory-and-graphify/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "phi-flow.md",
+      "type": "project_state",
+      "body_chars": 261,
+      "body_preview": "Phase 2 code-complete + green (W1/2/3a/3b); blocked on Tripp-gated compliance decisions (BAA / Tailscale / retention) || Tripp closes COMPLIANCE-REGISTER C1\u2013C7 ",
+      "ts": "2026-05-30T00:00:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "phi-flow",
+        "status": "paused",
+        "source_path": "phi-flow/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "portfolio-surface.md",
+      "type": "project_state",
+      "body_chars": 239,
+      "body_preview": "Phase 2 CLOSED \u2014 all 6 waves shipped; T3.2 armed and polling every 5min; W6/T6.5 stale-rejection live (7 tests) || Commit the workspace + plan Phase 3 (extend p",
+      "ts": "2026-05-30T15:10:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "portfolio-surface",
+        "status": "in-progress",
+        "source_path": "jarvis-os/.planning/portfolio-surface/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "pretoria-fields.md",
+      "type": "project_state",
+      "body_chars": 264,
+      "body_preview": "STOMPER HUNT ACTIVE \u2014 playlist drift overwriting hour rows on-air (hourly autofix containing 2026-05-30); v1.0 SHIPPED ( || Root-cause WPFQ playlist stomper: so",
+      "ts": "2026-05-30T15:10:00Z",
+      "source_inferred": "human-note",
+      "phi_flag": false,
+      "extra": {
+        "project": "pretoria-fields",
+        "status": "in-progress",
+        "source_path": "PretoriaFields/.planning/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-os)",
+      "id": "self-healing-service.md",
+      "type": "project_state",
+      "body_chars": 241,
+      "body_preview": "LIVE 2026-05-30 \u2014 1715 cycles completed, 5-min beat verified (pg-boss schedule), inert:false, incidents:0, 224ms median. || Monitor live cycle telemetry; produc",
+      "ts": "2026-05-30T00:00:00Z",
+      "source_inferred": "state-md-poller",
+      "phi_flag": false,
+      "extra": {
+        "project": "self-healing-service",
+        "status": "in-progress",
+        "source_path": "jarvis-os/.planning/self-healing-service/STATE.md"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-prime-ORPHAN)",
+      "id": "frank-v3.md",
+      "type": "project_state",
+      "body_chars": 45,
+      "body_preview": "Needs state review || Review project STATE.md",
+      "ts": "2026-05-28T22:58:56Z",
+      "source_inferred": "human-note",
+      "phi_flag": false,
+      "extra": {
+        "project": "frank-v3",
+        "status": "in-progress"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-prime-ORPHAN)",
+      "id": "jarvis-prime.md",
+      "type": "project_state",
+      "body_chars": 45,
+      "body_preview": "Needs state review || Review project STATE.md",
+      "ts": "2026-05-28T22:58:36Z",
+      "source_inferred": "human-note",
+      "phi_flag": false,
+      "extra": {
+        "project": "jarvis-prime",
+        "status": "in-progress"
+      }
+    },
+    {
+      "store": "hippocampus-project_state(jarvis-prime-ORPHAN)",
+      "id": "pretoria-fields.md",
+      "type": "project_state",
+      "body_chars": 169,
+      "body_preview": "v1.0 SHIPPED (22 skills); v1.1 Plan B morning-show architecture in flight; AC-09 deferred || Implement v1.1 Plan B morning-show per .planning/v1.1-PLAN-B-MORNIN",
+      "ts": "2026-05-28T22:58:56Z",
+      "source_inferred": "human-note",
+      "phi_flag": false,
+      "extra": {
+        "project": "pretoria-fields",
+        "status": "in-progress"
+      }
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-0",
+      "type": "conv-user",
+      "body_chars": 27,
+      "body_preview": "All pasted  to openclaw tui",
+      "ts": 1780773021252,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-1",
+      "type": "conv-assistant",
+      "body_chars": 1185,
+      "body_preview": "**Probed directly \u2014 still locked out. SuperServer's pubkey is not in macmini's `authorized_keys`.**  The paste reached me (this thread shows it), but `ssh-copy-",
+      "ts": 1780773112189,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-2",
+      "type": "conv-user",
+      "body_chars": 50,
+      "body_preview": "I need to talk to you on computer how do I do that",
+      "ts": 1780773803915,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-3",
+      "type": "conv-assistant",
+      "body_chars": 1477,
+      "body_preview": "**Three computer-side surfaces. They look similar; they route differently.**  | Surface | Open it with | Text goes to | Runs commands? | |---|---|---|---| | **T",
+      "ts": 1780774009688,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-4",
+      "type": "conv-user",
+      "body_chars": 54,
+      "body_preview": "Read workspace architecture the Shinto is pasted there",
+      "ts": 1780774468103,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-5",
+      "type": "conv-assistant",
+      "body_chars": 1417,
+      "body_preview": "**Read it. Doctrine matches my read \u2014 auth wall unchanged.**  | ARCHITECTURE.md says (lines 135\u2013162) | Status | |---|---| | Canonical alias `argus-mini`, user `",
+      "ts": 1780774669374,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-6",
+      "type": "conv-user",
+      "body_chars": 49,
+      "body_preview": "I\u2019m confused what exactly needs to be done simply",
+      "ts": 1780774838661,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-7",
+      "type": "conv-assistant",
+      "body_chars": 720,
+      "body_preview": "**One command. In a real Terminal. Once.**  Goal: let me log into the Mac mini. Right now I can't.  1. Open **Terminal** on your computer (not OpenClaw, not Tel",
+      "ts": 1780774907132,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-8",
+      "type": "conv-user",
+      "body_chars": 27,
+      "body_preview": "What terminal what computer",
+      "ts": 1780774954955,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-9",
+      "type": "conv-assistant",
+      "body_chars": 712,
+      "body_preview": "**Whichever computer you're sitting at right now. The app is literally called \"Terminal.\"**  | You're on... | App name | How to open | |---|---|---| | **Mac** (",
+      "ts": 1780775027875,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-10",
+      "type": "conv-user",
+      "body_chars": 13,
+      "body_preview": "One key added",
+      "ts": 1780775056860,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-11",
+      "type": "conv-assistant",
+      "body_chars": 877,
+      "body_preview": "**Door's open. Probed keyless \u2014 argus-mini answered without a password.**  ``` host:   Tripps-Mac-mini.local user:   trippmorgan macOS:  14.1.1 Sonoma arch:   x",
+      "ts": 1780775135349,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-12",
+      "type": "conv-user",
+      "body_chars": 28,
+      "body_preview": "Now continue with Jarvis-dev",
+      "ts": 1780775161772,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-13",
+      "type": "conv-assistant",
+      "body_chars": 1592,
+      "body_preview": "Doc updated. Reporting back.  **ARCHITECTURE.md updated \u2014 verified facts in, migration flagged.**  ``` Argus Mini section now reflects:   hostname  Tripps-Mac-m",
+      "ts": 1780775250817,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-14",
+      "type": "conv-user",
+      "body_chars": 54,
+      "body_preview": "You can go back to this point blockers removed I think",
+      "ts": 1780775634749,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-15",
+      "type": "conv-assistant",
+      "body_chars": 1384,
+      "body_preview": "**Resuming. SPEC is on disk and approved \u2014 phase is `plan`.**  `.planning/argus-mini-migration/SPEC.md` exists (5.1 KB, status: approved, owner: prime). The met",
+      "ts": 1780775927487,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-16",
+      "type": "conv-user",
+      "body_chars": 94,
+      "body_preview": "This is the memory improvement and integration with Jarvis-os check /projects for today\u2019s work",
+      "ts": 1780776087318,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-17",
+      "type": "conv-assistant",
+      "body_chars": 1417,
+      "body_preview": "Got it \u2014 the argus-mini thread was last session's lane. Today's actual work is **memory + Jarvis-OS integration**, which lands on three rows in the portfolio:  ",
+      "ts": 1780776106267,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-18",
+      "type": "conv-user",
+      "body_chars": 9,
+      "body_preview": ".projects",
+      "ts": 1780776146608,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-19",
+      "type": "conv-assistant",
+      "body_chars": 1793,
+      "body_preview": "``` [T0 READ] /projects \u2014 12 active projects  P1 \u25b8 portfolio-surface \u00b7 stale \u26a0    Phase 2 CLOSED \u2014 all 6 waves shipped; T3.2 armed, polling every 5min    \u2192 Phas",
+      "ts": 1780776363434,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-20",
+      "type": "conv-user",
+      "body_chars": 93,
+      "body_preview": "We were working on grapgify integration and memory improvements through phase a what happened",
+      "ts": 1780776540006,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-21",
+      "type": "conv-assistant",
+      "body_chars": 2000,
+      "body_preview": "**Found it. You weren't wrong \u2014 we drifted.**  The active lane is `.planning/memory-and-graphify/`, written 2026-06-06. Older `.planning/graphify-integration/` ",
+      "ts": 1780776653506,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-22",
+      "type": "conv-user",
+      "body_chars": 15,
+      "body_preview": "Continue please",
+      "ts": 1780776665079,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-23",
+      "type": "conv-assistant",
+      "body_chars": 2000,
+      "body_preview": "**Continuing.** The deep shape under all five Qs is **truth / index / view** \u2014 keep them separated and the questions answer themselves.  | Layer | What | Exampl",
+      "ts": 1780776811707,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-24",
+      "type": "conv-user",
+      "body_chars": 12,
+      "body_preview": "Yes continue",
+      "ts": 1780801127181,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-25",
+      "type": "conv-assistant",
+      "body_chars": 1591,
+      "body_preview": "**Done. Lane is now visible in `/projects` as fresh.**  Summary of what executed:  1. **`/projects` registration** \u2014 `memory-and-graphify.md` now lives in `jarv",
+      "ts": 1780801289602,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-26",
+      "type": "conv-user",
+      "body_chars": 34,
+      "body_preview": "Is graphify added to Jarvis-os yet",
+      "ts": 1780801897855,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-27",
+      "type": "conv-assistant",
+      "body_chars": 1588,
+      "body_preview": "**No. Only the tracking row is in jarvis-os \u2014 graphify itself is not.**  Verified just now: `memory-and-graphify.md` exists in `jarvis-os/.data/project-state/`,",
+      "ts": 1780801983598,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-28",
+      "type": "conv-user",
+      "body_chars": 68,
+      "body_preview": "Reread phase 1 was graphify integration with Jarvis-os what happened",
+      "ts": 1780802470133,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-29",
+      "type": "conv-assistant",
+      "body_chars": 2000,
+      "body_preview": "**You're right. I inverted Phase 1's intent. Let me name the error precisely before patching anything.**  **What I conflated.** \"Integrate with jarvis-os\" isn't",
+      "ts": 1780802577016,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-30",
+      "type": "conv-user",
+      "body_chars": 19,
+      "body_preview": "Yes reread state.md",
+      "ts": 1780802948586,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-31",
+      "type": "conv-assistant",
+      "body_chars": 2000,
+      "body_preview": "**Reread done. STATE.md confirms the inversion verbatim \u2014 six load-bearing lines carry the wrong lock.**  What the file actually says:  - **Line 19** \u2014 `Phase 1",
+      "ts": 1780803087179,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-32",
+      "type": "conv-user",
+      "body_chars": 8,
+      "body_preview": "Go state",
+      "ts": 1780803642042,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    },
+    {
+      "store": "conversation-history.jsonl",
+      "id": "turn-33",
+      "type": "conv-assistant",
+      "body_chars": 1641,
+      "body_preview": "**Done \u2014 STATE.md and the `project_state` atom are aligned. Both layers carry the corrected lock.**  Verified against the actual file at `jarvis-prime/.planning",
+      "ts": 1780803956606,
+      "source_inferred": "conversation",
+      "phi_flag": false,
+      "extra": {}
+    }
+  ]
+}

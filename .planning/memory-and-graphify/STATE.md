@@ -3,12 +3,12 @@ type: project_state
 project: memory-and-graphify
 status: in-progress
 priority: 1
-summary: "Phase 2 value path live: vault populated, /note search via FTS5, /api/v1/memory/atoms mounted, /graph served in Jarvis-os; 2026-06-09 adds automatic graph refresh pipeline + GUI auto-reload target."
-next_action: "Graph self-updates (cron */30, live 970n/1822e). B1–B7 + A5.proper all DONE & committed. Remaining Tripp calls: (1) merge feat/memory-atom-types to main (5 commits, pushed); (2) B3 phase-2 (context-docs + MEMORY.md → vault, needs D1 CHECK-widen); (3) B8 MCS primitive design."
+summary: "Memory and Graphify Phase 2 value path is live: vault search, memory atoms API, and graph atom nodes shipped."
+next_action: "Cross-link Projects tab to graph neighborhoods, add click-to-isolate, and improve source_path tooltips."
 source: human-note
 source_path: jarvis-prime/.planning/memory-and-graphify/STATE.md
 owner: prime
-updated_at: "2026-06-09T22:35:00Z"
+updated_at: "2026-06-16T23:55:00Z"
 visibility: mesh
 phi: false
 ---
@@ -113,6 +113,7 @@ All read-only. Zero mutations. Full reports retained in conversation history.
 | 2026-06-09 | **CONTINUOUS graph refresh — first cut** (f897504) — Voldemort-SSH bash, cron `*/30` | rsync jarvis-prime code → Voldemort → `graphify update .` → pull `graph.html` into `/graph/` as index.html + injected 60s poller. Worked (925→970 nodes) but SUPERSEDED same day (see next row) by a concurrent local tool. My `*/30` cron removed; bash file is now a shim. |
 | 2026-06-09 | **SUPERSEDED by local whole-workspace tool** (06334d9) — `jarvis-os/bin/refresh-graphify-gui.mjs` (`npm run graph:refresh`), cron `*/15` flock | A concurrent process took ownership of `/graph/` with a better design: graphify runs LOCALLY on SuperServer (no Voldemort SSH), stages the ENTIRE workspace as one corpus with **clinical-archive EXCLUDED (PHI boundary)**, publishes graph.json + a 2.8 KB thin-client index.html (vis-network from CDN, meta-refresh 5 min) — sidesteps graphify's 5000-node HTML limit. This is a SUPERSET of "merge jarvis-prime+jarvis-os": **23975 nodes / 33752 edges** (whole workspace incl. planning .md). Banked the untracked tool + shim + npm script. |
 | 2026-06-09 | **Graph SCOPED to code repos** (69f6b74) — Tripp's call: jarvis-prime + jarvis-os code only, `.md` dropped | Whole-workspace 24k was ~96% markdown, not code. Per-repo rsync loop (GRAPHIFY_REPOS env), excludes .planning/.data/public-graph, **PHI clinical-archive excludes preserved**. Result: clean **862 nodes / 1943 edges (829 KB)**, renders instantly. `/graph/` is now the live, self-refreshing (`*/15` cron + 5-min client meta-refresh) code graph of the two repos. Track A graphify observability = DONE. |
+| 2026-07-05 | **DIL memory-atoms sink SHIPPED + LIVE** (84dba4f + d56a63f on `feat/memory-atom-types`) — the memory loop is closed: DIL findings → hippocampus vault → harness recall + graph | Tripp's ask ("DIL/SHS should provide memory to the harness, visible on the Graphify map"). Gap: findings died as ephemeral JSON + digest; vault frozen at 28 notes since 06-07. New `sinks/memory-atoms.ts` distills memorable findings (crit/error any conf, warn@high, ≤3/run) into vault feedback notes — TITLE-keyed slug (live triplicate ids would splinter recurrence), same-title collapse, bounded ## History recurrence on ONE note, PHI redactBody gate, foreign-note protection, atomic writes, DIL_MEMORY_ATOMS kill-switch, dryRun clean. Graph: `atom-dil` node type + 'dil memory' legend + `remembered-as` edges (slug rule mirrored — comment warns to keep in sync). Verified LIVE: 07-04 triplicate → 1 atom, FTS hit on :3401 in seconds, 3 remembered-as edges on the map. jarvis-os daemon restarted → armed for tonight's 06:25 run. ALSO BANKED: pre-existing uncommitted in-flight emitFindings wiring + enrichWithIncidents graph pass (stash-hazard class). SHS untouched (its `recovered` flag already flows via node-incidents → findings). |
 
 ## Open questions
 
@@ -178,9 +179,43 @@ All read-only. Zero mutations. Full reports retained in conversation history.
 
 **Track B status:** B1 → B8 complete. Track B closed (2026-06-16).
 
+## 2026-06-16 — Track C #1 SHIPPED (atom enrichment)
+
+`bin/refresh-graphify-gui.mjs` extended with `enrichWithAtoms()` between
+graphify extraction and publish. Walks `hippocampus-vault/` and
+`.data/project-state/`, mints typed nodes (`file_type: atom-vault` cyan,
+`atom-state` magenta), follows `[[name]]` backlinks for edges. Hard-skips
+any atom whose frontmatter has `phi: true`.
+
+**Verified twice (2026-06-16 23:50 ET):**
+- 920 nodes total — 869 code (AST) + 28 atom-vault + 23 atom-state
+- 1989 edges total — 31 touching atoms (backlinks)
+- 0 PHI nodes published, 0 atoms skipped (no `phi:true` in store today)
+- 0 nodes on scalpel/clinical/patient source paths
+- Refresh wall-clock: ~4.5 s end-to-end
+
+GUI (`/graph/index.html`) legend already names the two atom types; no
+template edit needed — the legend is generated by the same script that
+publishes the graph, so the two stay in lockstep.
+
+`*/15` cron picks the new pass up automatically; no operator action
+required to enable it.
+
+**Track C status:** #1 done. Remaining:
+- **#2** — cross-link Projects view → graph neighborhood (click a project, jump to its node in `/graph/` with filter pre-applied)
+- **#3** — polish: source_path tooltips on hover, click-to-isolate community subgraph, group-by-_origin toggle
+
 - **B8 (MCS primitive):**
   - Q3 / Q4 locked 2026-06-16: drift N=10, soft heartbeat = 2 days, hard = 14 days, dry-run grace = 7 days then auto-promote.
   - jarvis-os: `feat(mcs): wave B8 — Memory Consolidation Session primitive` (`12405a5`) — 17 files / +2047 LOC. Adds `src/services/memory-consolidation/` (orchestrator, writeback, regen, CLI), `mcs-prep` pg-boss handler (hard-isolated), schedule `'0 5 */2 * *'`, router capability `memory-consolidation`.
   - jarvis-prime: `/mcs` skill at `skills/mcs/{mcs.md,mcs.sh}` — wraps `scripts/run-mcs-prep.mjs` with subcommands `status / prep / writeback / regen`.
   - Tests: 21 vitest passes (orchestrator + writeback integration + heartbeat triggers + parser).
   - Live smoke (2026-06-16): `prep` rendered `MCS-2026-06-16.md` from 21 project_state + 28 vault atoms; `regen` produced a 13.3 kB MEMORY.md preview; `.state.json` initialized.
+
+- **B9 (semantic recall — embedding backfill via Frank):** shipped 2026-07-06.
+  - Embedder: `nomic-embed-text` (768-dim, F16) on Frank's Ollama (`192.168.0.108:11434`), `keep_alive: 24h`, task prefixes (`search_document:` / `search_query:`). Zero marginal cost.
+  - jarvis-os: `src/services/hippocampus/{embed-client,embed-backfill,embed-backfill-cli,semantic-search,vault-root}.ts` + hourly pg-boss job `hippocampus-embed-backfill` (`'11 * * * *'`, also rides `memory-consolidation`). Kernel `/search` on :3401 now hybrid: FTS5 keyword + cosine semantic, fused via RRF (k=60), cosine floor 0.5, fail-soft to keyword-only on any embed failure (query embed budget 1200 ms).
+  - Backfill: 32/32 vault notes embedded, vectors in `embedding_metadata` (SQLite). Reindex preserves vectors (regression-tested).
+  - Ollama quirk: `/api/embed` ignores `options.num_ctx` and `truncate:true` at the HTTP layer for oversized dense inputs → `MAX_EMBED_CHARS = 6000` head-truncation in the client.
+  - Tests: 272 hippocampus-suite / 1471 full-suite green (Node 22.16.0 — system node gives 71 spurious failures). Deployed: hippocampus-server + jarvis-os daemon restarted, live `/search` verified `semantic: true` at ~100–160 ms warm.
+  - Known gap: vault (32 notes) ≠ Prime's Claude auto-memory dir — those notes aren't semantically searchable until synced into the vault. Candidate B10.
