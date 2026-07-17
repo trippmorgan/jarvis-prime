@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import type { FastifyBaseLogger } from 'fastify'
 
 export interface TelegramUpdate {
@@ -13,6 +14,23 @@ export interface TelegramUpdate {
     caption?: string
     photo?: Array<{ file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }>
   }
+}
+
+type TransportErrorContext = {
+  error: string
+  causeCode?: string
+  causeName?: string
+}
+
+function transportErrorContext(err: unknown): TransportErrorContext {
+  const error = err instanceof Error ? err.message : String(err)
+  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined
+  const causeRecord = cause && typeof cause === 'object' ? cause as Record<string, unknown> : undefined
+  const rawCode = causeRecord?.code
+  const rawName = causeRecord?.name
+  const causeCode = typeof rawCode === 'string' && /^[A-Z0-9_]{2,64}$/.test(rawCode) ? rawCode : undefined
+  const causeName = typeof rawName === 'string' && /^[A-Za-z][A-Za-z0-9]{1,63}$/.test(rawName) ? rawName : undefined
+  return { error, ...(causeCode ? { causeCode } : {}), ...(causeName ? { causeName } : {}) }
 }
 
 export interface TelegramPollerConfig {
@@ -32,6 +50,7 @@ export interface TelegramPollerConfig {
 
 export class TelegramPoller {
   private readonly apiBase: string
+  private readonly botToken: string
   private readonly allowedChatIds: Set<string>
   private readonly pollTimeout: number
   private readonly onMessage: TelegramPollerConfig['onMessage']
@@ -49,6 +68,7 @@ export class TelegramPoller {
 
   constructor(config: TelegramPollerConfig) {
     this.apiBase = `https://api.telegram.org/bot${config.botToken}`
+    this.botToken = config.botToken
     this.allowedChatIds = new Set(config.allowedChatIds)
     this.pollTimeout = config.pollTimeoutSecs
     this.onMessage = config.onMessage
@@ -94,15 +114,15 @@ export class TelegramPoller {
         await this.poll()
       } catch (err) {
         if (!this.running) break
-        const msg = err instanceof Error ? err.message : String(err)
-        const is409 = msg.includes('409')
+        const details = transportErrorContext(err)
+        const is409 = details.error.includes('409')
         if (is409) {
           this.log.warn('Telegram poll conflict (409) — another process is polling this token. Yielding 90s.')
           await sleep(90_000)
         } else {
           const backoff = this.pollBackoffMs
           if (!this.circuitOpen) {
-            this.log.error({ error: msg }, `Telegram poll error — retrying in ${backoff / 1000}s`)
+            this.log.error(details, `Telegram poll error — retrying in ${backoff / 1000}s`)
           }
           await sleep(backoff)
         }
@@ -115,6 +135,27 @@ export class TelegramPoller {
   stop(): void {
     this.running = false
     this.abortController?.abort()
+  }
+
+  private noteTransportSuccess(): void {
+    if (this.circuitOpen) {
+      this.log.info('Telegram transport recovered — circuit breaker closed')
+    }
+    this.circuitOpen = false
+    this.consecutiveTransportFailures = 0
+  }
+
+  private noteTransportFailure(err: unknown): TransportErrorContext {
+    const details = transportErrorContext(err)
+    this.consecutiveTransportFailures++
+    if (!this.circuitOpen && this.consecutiveTransportFailures >= TelegramPoller.BREAKER_TRIP_THRESHOLD) {
+      this.circuitOpen = true
+      this.log.error(
+        { ...details, consecutiveFailures: this.consecutiveTransportFailures },
+        'Telegram transport DOWN — circuit breaker open. Suppressing per-request errors until recovery.',
+      )
+    }
+    return details
   }
 
   /**
@@ -140,32 +181,22 @@ export class TelegramPoller {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const res = await fetch(url, init)
-        // Success (HTTP-level) — reset circuit breaker
-        if (this.circuitOpen) {
-          this.log.info('Telegram transport recovered — circuit breaker closed')
-          this.circuitOpen = false
-        }
-        this.consecutiveTransportFailures = 0
+        // Success (HTTP-level) — reset circuit breaker.
+        this.noteTransportSuccess()
         return res
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
+        const details = transportErrorContext(err)
         if (attempt === 0) {
           if (!this.circuitOpen) {
-            this.log.warn({ ...ctx, path, error: errMsg }, 'Telegram fetch failed — retrying once after 200ms')
+            this.log.warn({ ...ctx, path, ...details }, 'Telegram fetch failed — retrying once after 200ms')
           }
           await sleep(200)
           continue
         }
-        // Both attempts failed — increment circuit breaker
-        this.consecutiveTransportFailures++
-        if (!this.circuitOpen && this.consecutiveTransportFailures >= TelegramPoller.BREAKER_TRIP_THRESHOLD) {
-          this.circuitOpen = true
-          this.log.error(
-            { consecutiveFailures: this.consecutiveTransportFailures, lastError: errMsg },
-            'Telegram transport DOWN — circuit breaker open. Suppressing per-request errors until recovery.',
-          )
-        } else if (!this.circuitOpen) {
-          this.log.error({ ...ctx, path, error: errMsg }, 'Telegram fetch failed after retry')
+        // Both attempts failed — increment circuit breaker.
+        this.noteTransportFailure(err)
+        if (!this.circuitOpen) {
+          this.log.error({ ...ctx, path, ...details }, 'Telegram fetch failed after retry')
         }
         // When circuit is open, suppress individual error logs (already reported the state change)
         return null
@@ -299,6 +330,7 @@ export class TelegramPoller {
 
       const data = (await res.json()) as { ok: boolean; result: TelegramUpdate[] }
       if (!data.ok || !data.result) return
+      this.noteTransportSuccess()
 
       for (const update of data.result) {
         this.offset = update.update_id + 1
@@ -308,8 +340,54 @@ export class TelegramPoller {
         this.persistOffset()
         await this.handleUpdate(update)
       }
+    } catch (err) {
+      this.noteTransportFailure(err)
+      throw err
     } finally {
       clearTimeout(timeout)
+    }
+  }
+
+  /**
+   * Downloads the highest-resolution variant of an incoming photo to local
+   * disk. The `claude --print` CLI has no image/attachment flag, but it runs
+   * as a full agent with an unrestricted (--dangerously-skip-permissions)
+   * Read tool, which is multimodal — so the fix is to get the file onto disk
+   * and reference its path in the prompt text, not to pass image bytes
+   * through this pipeline directly.
+   */
+  private async downloadPhoto(fileId: string, chatId: string): Promise<string | null> {
+    try {
+      const infoRes = await fetch(`${this.apiBase}/getFile?file_id=${fileId}`)
+      if (!infoRes.ok) {
+        this.log.warn({ chatId, status: infoRes.status }, 'Telegram getFile failed')
+        return null
+      }
+      const info = (await infoRes.json()) as { ok: boolean; result?: { file_path?: string } }
+      const remotePath = info.result?.file_path
+      if (!info.ok || !remotePath) {
+        this.log.warn({ chatId }, 'Telegram getFile returned no file_path')
+        return null
+      }
+
+      const fileRes = await fetch(`https://api.telegram.org/file/bot${this.botToken}/${remotePath}`)
+      if (!fileRes.ok) {
+        this.log.warn({ chatId, status: fileRes.status }, 'Telegram photo download failed')
+        return null
+      }
+
+      const ext = remotePath.includes('.') ? remotePath.slice(remotePath.lastIndexOf('.')) : '.jpg'
+      const dir = join(tmpdir(), 'jarvis-prime-telegram-photos')
+      mkdirSync(dir, { recursive: true })
+      const localPath = join(dir, `${chatId}-${Date.now()}${ext}`)
+      writeFileSync(localPath, Buffer.from(await fileRes.arrayBuffer()))
+      return localPath
+    } catch (err) {
+      this.log.warn(
+        { chatId, error: err instanceof Error ? err.message : String(err) },
+        'Telegram photo download threw',
+      )
+      return null
     }
   }
 
@@ -332,10 +410,18 @@ export class TelegramPoller {
     let text: string
     if (hasPhoto) {
       const caption = msg.caption?.trim()
-      text = caption
-        ? `[Photo received] ${caption}`
-        : '[Photo received — no caption. I can see you sent an image but cannot process it without a caption describing what you need.]'
-      this.log.info({ chatId, userId, hasCaption: !!caption }, 'Telegram photo received')
+      const photos = msg.photo!
+      const best = photos[photos.length - 1] // Telegram orders variants ascending by size
+      const localPath = await this.downloadPhoto(best.file_id, chatId)
+      if (localPath) {
+        text = `[Photo received, saved to ${localPath}. Use the Read tool to view it before responding.]${caption ? ' ' + caption : ' Read any text or names visible in the image and report what you find.'}`
+        this.log.info({ chatId, userId, hasCaption: !!caption, localPath }, 'Telegram photo downloaded')
+      } else {
+        text = caption
+          ? `[Photo received but download failed] ${caption}`
+          : '[Photo received but download failed — I cannot process it without a caption describing what you need.]'
+        this.log.warn({ chatId, userId }, 'Telegram photo download failed — falling back to placeholder')
+      }
     } else {
       text = msg.text!
       this.log.info({ chatId, userId, text: text.slice(0, 80) }, 'Telegram message received')

@@ -1226,8 +1226,8 @@ export class MessageProcessor {
     }, DEFERRED_HEARTBEAT_MS)
 
     try {
-      const basePrompt = await this.promptBuilder.build(msg.text)
-      const history = this.history.getRecent(10)
+      const basePrompt = await this.promptBuilder.build(msg.text, { includeConversation: false })
+      const history = this.history.getRecentBeforeCurrent(msg.text, 10)
 
       this.log.info(
         {
@@ -1416,13 +1416,10 @@ export class MessageProcessor {
     }, ACK_DELAY_MS)
 
     try {
-      // Note: basePrompt already includes the formatted "Recent conversation"
-      // block from PromptBuilder plus the current user message. The orchestrator
-      // also formats history/userMsg in its own affordance/integration builders.
-      // v1 accepts this redundancy — stripping it would require surgery inside
-      // PromptBuilder which lives on the single-brain path.
-      const basePrompt = await this.promptBuilder.build(msg.text)
-      const history = this.history.getRecent(10)
+      // The affordance/integration builders format history and the current
+      // message into their own user message, so the base prompt omits both.
+      const basePrompt = await this.promptBuilder.build(msg.text, { includeConversation: false })
+      const history = this.history.getRecentBeforeCurrent(msg.text, 10)
 
       this.log.info(
         {
@@ -1526,8 +1523,8 @@ export class MessageProcessor {
     let cardPosted = false
 
     try {
-      const basePrompt = await this.promptBuilder.build(msg.text)
-      const history = this.history.getRecent(10)
+      const basePrompt = await this.promptBuilder.build(msg.text, { includeConversation: false })
+      const history = this.history.getRecentBeforeCurrent(msg.text, 10)
 
       this.log.info(
         {

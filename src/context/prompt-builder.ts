@@ -37,7 +37,10 @@ export class PromptBuilder {
     this.loadSkills()
   }
 
-  async build(userMessage: string): Promise<string> {
+  async build(
+    userMessage: string,
+    options: { includeConversation?: boolean } = {},
+  ): Promise<string> {
     const parts: string[] = []
 
     parts.push(this.getSystemContext())
@@ -53,10 +56,15 @@ export class PromptBuilder {
     const memoryBlock = await recallMemory(userMessage)
     if (memoryBlock) parts.push(memoryBlock)
 
-    const historyBlock = this.history.formatForPrompt(10)
-    if (historyBlock) parts.push(historyBlock)
-
-    parts.push(`## Current message from Tripp\n${userMessage}`)
+    // Single-brain receives one self-contained prompt, so include prior turns
+    // and the current message here. Dual-brain affordance builders add those in
+    // their user message instead; omitting them from the shared base prevents
+    // the Telegram turn from being repeated across both system and user input.
+    if (options.includeConversation !== false) {
+      const historyBlock = this.history.formatForPrompt(10, userMessage)
+      if (historyBlock) parts.push(historyBlock)
+      parts.push(`## Current message from Tripp\n${userMessage}`)
+    }
 
     return parts.join('\n\n')
   }

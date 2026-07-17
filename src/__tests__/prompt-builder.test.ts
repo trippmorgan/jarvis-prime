@@ -124,3 +124,59 @@ describe("PromptBuilder — lazy skill loading", () => {
     expect(result).toContain("## SSH target")
   })
 })
+
+describe("PromptBuilder — conversation duplication", () => {
+  const CURRENT = "Case 6: left lsv rfa ablation"
+
+  function seededBuilder(): { builder: PromptBuilder; history: ConversationHistory } {
+    const history = new ConversationHistory(historyPath)
+    history.append("user", "Case 5 right renal artery stent")
+    history.append("assistant", "Case 5 is written and verified on disk.")
+    // The processor appends the current user turn BEFORE building the prompt.
+    history.append("user", CURRENT)
+    return { builder: new PromptBuilder(history, { skillsDir }), history }
+  }
+
+  it("single-brain: the current message appears once, not in both history and the current-message block", async () => {
+    const { builder } = seededBuilder()
+    const result = await builder.build(CURRENT)
+
+    expect(result).toContain("## Current message from Tripp")
+    expect(result.split(CURRENT).length - 1).toBe(1)
+    // Prior turns still survive.
+    expect(result).toContain("Case 5 right renal artery stent")
+  })
+
+  it("dual-brain: includeConversation=false omits both history and the current message from the base prompt", async () => {
+    const { builder } = seededBuilder()
+    const result = await builder.build(CURRENT, { includeConversation: false })
+
+    expect(result).not.toContain("## Recent conversation")
+    expect(result).not.toContain("## Current message from Tripp")
+    expect(result).not.toContain(CURRENT)
+    // Identity/skill context is still present.
+    expect(result.length).toBeGreaterThan(0)
+  })
+
+  it("getRecentBeforeCurrent drops the just-appended current turn but keeps prior turns", () => {
+    const { history } = seededBuilder()
+
+    const all = history.getRecent(10)
+    expect(all.at(-1)?.content).toBe(CURRENT)
+
+    const before = history.getRecentBeforeCurrent(CURRENT, 10)
+    expect(before.at(-1)?.content).toBe("Case 5 is written and verified on disk.")
+    expect(before.some((e) => e.content === CURRENT)).toBe(false)
+    expect(before).toHaveLength(2)
+  })
+
+  it("getRecentBeforeCurrent leaves history intact when the last turn is not the current message", () => {
+    const history = new ConversationHistory(historyPath)
+    history.append("user", "earlier question")
+    history.append("assistant", "earlier answer")
+
+    const before = history.getRecentBeforeCurrent(CURRENT, 10)
+    expect(before).toHaveLength(2)
+    expect(before.at(-1)?.content).toBe("earlier answer")
+  })
+})

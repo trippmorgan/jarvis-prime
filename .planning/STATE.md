@@ -1,14 +1,14 @@
 ---
 type: project_state
 project: jarvis-prime
-status: in-progress
+status: "in-progress"
 priority: 1
-summary: "v1.0.0 shipped (Waves 1-8); active: AVSO v1 nav, Athena v2 ledger, /projects + /note skills, dual-brain mode persistence"
-next_action: "Wave 9 design locked but gated on corpus-callosum W8.9 A/B baseline; stabilize Athena v2 write-ledger meanwhile"
+summary: "Prime is active after legacy-orchestrator disablement, corpus hardening, and Telegram media intake repair."
+next_action: "Refresh architecture around the Prime/Argus single-brain direction and stabilize the Athena write ledger."
 source: human-note
 source_path: jarvis-prime/.planning/STATE.md
 owner: prime
-updated_at: "2026-05-30T14:30:00Z"
+updated_at: "2026-07-14T01:37:41Z"
 visibility: mesh
 phi: false
 ---

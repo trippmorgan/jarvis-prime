@@ -57,8 +57,24 @@ export class ConversationHistory {
     return entries
   }
 
-  formatForPrompt(maxEntries: number = 10): string {
-    const entries = this.getRecent(maxEntries)
+  /**
+   * Returns context preceding the user turn that was just appended by the
+   * processor. Dual-brain prompts pass the current message separately; leaving
+   * the appended copy in history made each hemisphere see the same Telegram
+   * message twice (and occasionally report a false duplicate delivery).
+   */
+  getRecentBeforeCurrent(userMessage: string, maxEntries: number = 10): HistoryEntry[] {
+    const entries = this.getRecent(maxEntries + 1)
+    const last = entries.at(-1)
+    const storedMessage = userMessage.slice(0, 2000)
+    if (last?.role === 'user' && last.content === storedMessage) entries.pop()
+    return entries.slice(-maxEntries)
+  }
+
+  formatForPrompt(maxEntries: number = 10, currentUserMessage?: string): string {
+    const entries = currentUserMessage === undefined
+      ? this.getRecent(maxEntries)
+      : this.getRecentBeforeCurrent(currentUserMessage, maxEntries)
     if (entries.length === 0) return ''
 
     let result = '## Recent conversation\n'
