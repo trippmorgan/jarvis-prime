@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ConversationHistory } from './history.js'
+import { conscienceBlock } from './conscience.js'
 import { recallMemory } from './memory-recall.js'
 
 const DEFAULT_SKILLS_DIR = '/home/tripp/.claude/skills'
@@ -44,6 +45,12 @@ export class PromptBuilder {
     const parts: string[] = []
 
     parts.push(this.getSystemContext())
+
+    // Conscience: the Φ-selected, chain-attested working memory — always in
+    // the prompt, single- and dual-brain alike (both build through here).
+    // Fail-soft: absent snapshot → empty string, prompt unchanged.
+    const conscience = conscienceBlock()
+    if (conscience) parts.push(conscience)
 
     const triggered = this.detectTriggeredCommands(userMessage)
     const skillBlock = this.renderSkillBlock(triggered)
