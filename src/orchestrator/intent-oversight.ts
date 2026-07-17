@@ -81,6 +81,51 @@ Output rules — follow EXACTLY:
   what you think they actually meant and asking them to confirm or restate>
 Default to OK. Do not nitpick tone or completeness. One line only.`
 
+// --- Jarvis conscience (jarvis-ledger Phase D) -----------------------------
+// The Φ-selected, chain-attested working set of the network's most
+// integrated memories — Tripp's standing corrections and active-project
+// truths. The oversight judge reads replies against it: contradicting a
+// standing principle counts as answering the wrong thing. Loaded from the
+// consolidation engine's snapshot file; absent/unreadable → judge runs
+// exactly as before (never throws, never blocks).
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+let conscienceCache: { block: string; readAt: number } = { block: '', readAt: 0 }
+
+function conscienceBlock(): string {
+  if (Date.now() - conscienceCache.readAt < 60_000) return conscienceCache.block
+  let block = ''
+  try {
+    const cfgDir = process.env.PHI_LEDGER_DIR ?? join(homedir(), '.config', 'phi-ledger')
+    const snapshot = JSON.parse(
+      readFileSync(join(cfgDir, 'conscience', 'current.json'), 'utf8'),
+    ) as { schemaVersion?: number; items?: Array<{ slug?: string; description?: string }> }
+    const items = Array.isArray(snapshot.items) ? snapshot.items.slice(0, 8) : []
+    if (snapshot.schemaVersion === 1 && items.length > 0) {
+      const lines = items
+        .filter((i) => i.slug && i.description)
+        .map((i) => `- ${i.slug}: ${String(i.description).replace(/\s+/g, ' ').slice(0, 140)}`)
+      block = [
+        '',
+        'STANDING PRINCIPLES (Jarvis conscience — chain-attested working memory):',
+        ...lines,
+        'If the auto-reply CONTRADICTS one of these principles, that also counts as answering',
+        'the wrong thing → FIX. Principles inform the verdict; when unsure, still output OK.',
+      ].join('\n')
+    }
+  } catch {
+    /* no conscience file → unchanged behavior */
+  }
+  conscienceCache = { block, readAt: Date.now() }
+  return block
+}
+
+function buildSystemPrompt(): string {
+  return SYSTEM_PROMPT + conscienceBlock()
+}
+
 function buildUserBlock(i: OversightInput): string {
   const ctx = i.recentTurns
     .slice(-6)
@@ -139,7 +184,7 @@ export async function reviewOrchestratorReply(
         stream: false,
         options: { num_predict: 120, temperature: 0, keep_alive: -1 },
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: buildSystemPrompt() },
           { role: 'user', content: buildUserBlock(input) },
         ],
       }),
