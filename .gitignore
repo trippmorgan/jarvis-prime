@@ -6,3 +6,10 @@ dist/
 .tmp/
 coverage/
 .DS_Store
+
+# Never commit snapshotted context-docs or atom dumps — they embed TOOLS.md
+# (credentials) verbatim. Blocked GitHub push 2026-07-18. See backup branch.
+.planning/**/snapshot/
+.planning/**/context-docs/
+.planning/**/.atoms-full.json
+**/.atoms-full.json
