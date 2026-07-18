@@ -23,10 +23,22 @@ interface ConscienceItem {
   body?: string
 }
 
+interface ReflectiveItem {
+  title?: string
+  severity?: string
+  category?: string
+  recurring?: boolean
+  date?: string
+  recommendation?: string
+}
+
 interface ConscienceSnapshot {
   schemaVersion?: number
   snapshotHash?: string
   generatedAt?: string
+  /** v2 chambers; `items` is retained as the v1-compatible normative list. */
+  normative?: ConscienceItem[]
+  reflective?: ReflectiveItem[]
   items?: ConscienceItem[]
 }
 
@@ -48,25 +60,56 @@ export function conscienceBlock(): string {
     const snapshot = JSON.parse(
       readFileSync(join(cfgDir, 'conscience', 'current.json'), 'utf8'),
     ) as ConscienceSnapshot
-    const items = Array.isArray(snapshot.items) ? snapshot.items : []
-    if (snapshot.schemaVersion === 1 && items.length > 0 && snapshot.snapshotHash) {
+    const normative = Array.isArray(snapshot.normative)
+      ? snapshot.normative
+      : Array.isArray(snapshot.items) ? snapshot.items : []
+    const reflective = Array.isArray(snapshot.reflective) ? snapshot.reflective : []
+    if (snapshot.snapshotHash && (normative.length > 0 || reflective.length > 0)) {
       const lines: string[] = [
-        '## Conscience — chain-attested standing principles',
-        `The network's most integrated memories, selected nightly by Φ consolidation and`,
-        `attested on the jarvis ledger (snapshot ${snapshot.snapshotHash.slice(0, 16)}…).`,
-        'Weigh every answer and every decision against these. When a requested action or a',
-        'draft reply conflicts with one, say so explicitly rather than proceeding silently.',
+        '## Conscience — chain-attested working memory',
+        `Selected nightly by Φ consolidation, attested on the jarvis ledger`,
+        `(snapshot ${snapshot.snapshotHash.slice(0, 16)}…). Two chambers, different weight.`,
         '',
       ]
       let budget = TOTAL_MAX_CHARS
-      for (const item of items) {
-        if (!item.slug || budget <= 0) continue
-        const description = String(item.description ?? '').replace(/\s+/g, ' ').trim()
-        const body = String(item.body ?? '').replace(/\s+/g, ' ').trim().slice(0, BODY_MAX_CHARS)
-        const entry = `### ${item.slug}\n${description}${body ? `\n${body}` : ''}`
-        if (entry.length > budget) break
-        lines.push(entry, '')
-        budget -= entry.length
+
+      if (normative.length > 0) {
+        lines.push(
+          '### I. Standing principles — durable, pinned',
+          'These are how Tripp has told you to work. Weigh every answer and every action',
+          'against them. If a request or a draft reply conflicts with one, say so explicitly',
+          'rather than proceeding silently.',
+          '',
+        )
+        for (const item of normative) {
+          if (!item.slug || budget <= 0) continue
+          const description = String(item.description ?? '').replace(/\s+/g, ' ').trim()
+          const body = String(item.body ?? '').replace(/\s+/g, ' ').trim().slice(0, BODY_MAX_CHARS)
+          const entry = `**${item.slug}** — ${description}${body ? `\n${body}` : ''}`
+          if (entry.length > budget) break
+          lines.push(entry, '')
+          budget -= entry.length
+        }
+      }
+
+      if (reflective.length > 0) {
+        lines.push(
+          '### II. Recent failures and open concerns — what went wrong lately',
+          'Known problems the network found in itself. Do not repeat them; if the current',
+          'task touches one, mention it rather than walking into it again.',
+          '',
+        )
+        for (const item of reflective) {
+          if (!item.title || budget <= 0) continue
+          const flags = [item.severity, item.category, item.recurring ? 'RECURRING' : '']
+            .filter(Boolean)
+            .join(' · ')
+          const rec = String(item.recommendation ?? '').replace(/\s+/g, ' ').trim()
+          const entry = `- [${flags}] ${String(item.title).replace(/\s+/g, ' ').trim()}${rec ? `\n  → ${rec}` : ''}`
+          if (entry.length > budget) break
+          lines.push(entry)
+          budget -= entry.length
+        }
       }
       block = lines.join('\n').trim()
     }
