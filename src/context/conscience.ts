@@ -30,6 +30,14 @@ interface ReflectiveItem {
   recurring?: boolean
   date?: string
   recommendation?: string
+  persistence?: 'new' | 'persisting'
+  runsSeen?: number
+}
+
+interface ResolvedItem {
+  title?: string
+  resolvedAt?: string
+  runsSeen?: number
 }
 
 interface ConscienceSnapshot {
@@ -39,6 +47,7 @@ interface ConscienceSnapshot {
   /** v2 chambers; `items` is retained as the v1-compatible normative list. */
   normative?: ConscienceItem[]
   reflective?: ReflectiveItem[]
+  resolved?: ResolvedItem[]
   items?: ConscienceItem[]
 }
 
@@ -64,7 +73,8 @@ export function conscienceBlock(): string {
       ? snapshot.normative
       : Array.isArray(snapshot.items) ? snapshot.items : []
     const reflective = Array.isArray(snapshot.reflective) ? snapshot.reflective : []
-    if (snapshot.snapshotHash && (normative.length > 0 || reflective.length > 0)) {
+    const resolved = Array.isArray(snapshot.resolved) ? snapshot.resolved : []
+    if (snapshot.snapshotHash && (normative.length > 0 || reflective.length > 0 || resolved.length > 0)) {
       const lines: string[] = [
         '## Conscience — chain-attested working memory',
         `Selected nightly by Φ consolidation, attested on the jarvis ledger`,
@@ -101,11 +111,29 @@ export function conscienceBlock(): string {
         )
         for (const item of reflective) {
           if (!item.title || budget <= 0) continue
-          const flags = [item.severity, item.category, item.recurring ? 'RECURRING' : '']
+          const continuity = item.persistence === 'persisting'
+            ? `PERSISTING ${item.runsSeen ?? 1} runs`
+            : item.persistence === 'new' ? 'NEW' : ''
+          const flags = [item.severity, item.category, item.recurring ? 'RECURRING' : '', continuity]
             .filter(Boolean)
             .join(' · ')
           const rec = String(item.recommendation ?? '').replace(/\s+/g, ' ').trim()
           const entry = `- [${flags}] ${String(item.title).replace(/\s+/g, ' ').trim()}${rec ? `\n  → ${rec}` : ''}`
+          if (entry.length > budget) break
+          lines.push(entry)
+          budget -= entry.length
+        }
+      }
+      if (resolved.length > 0 && budget > 0) {
+        lines.push(
+          '',
+          '### III. Recently resolved — evidence that corrective action worked',
+          'Retain the lesson without continuing to treat the old problem as active.',
+          '',
+        )
+        for (const item of resolved) {
+          if (!item.title || budget <= 0) continue
+          const entry = `- ${String(item.title).replace(/\s+/g, ' ').trim()} — resolved ${item.resolvedAt ?? 'recently'} after ${item.runsSeen ?? 1} observed run(s)`
           if (entry.length > budget) break
           lines.push(entry)
           budget -= entry.length
