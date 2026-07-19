@@ -4,7 +4,8 @@
  * context. Pulls from two jarvis-OS surfaces (authenticated with KERNEL_TOKEN,
  * the same creds Prime already uses to register with the kernel):
  *
- *   - Hippocampus search  GET /api/v1/hippocampus/search?q=&limit=  → relevant notes
+ *   - Hippocampus reflect GET /api/v1/hippocampus/reflect?q=&limit=&depth=2
+ *     → relevant notes plus the associative paths that connected them
  *   - Active projects     GET /api/v1/projects                       → portfolio rows
  *
  * Fail-soft and timeout-bounded: any error / kernel-down returns '' so a memory
@@ -18,6 +19,10 @@ interface HippoResult {
   description: string
   type: string
   score?: number
+  activation?: number
+  distance?: number
+  path?: string[]
+  body?: string
 }
 
 interface ProjectRow {
@@ -47,10 +52,10 @@ export async function recallMemory(query: string, opts: MemoryRecallOptions = {}
   const headers = { Authorization: `Bearer ${kernelToken}` }
   const q = encodeURIComponent(query.trim().slice(0, 200))
 
-  const [notes, projects] = await Promise.all([
-    fetchJson(`${kernelUrl}/api/v1/hippocampus/search?q=${q}&limit=${limit}`, headers, timeoutMs).catch(
+  const [reflection, projects] = await Promise.all([
+    fetchJson(`${kernelUrl}/api/v1/hippocampus/reflect?q=${q}&limit=${limit}&depth=2`, headers, timeoutMs).catch(
       (err) => {
-        opts.logger?.warn({ error: errMsg(err) }, 'memory recall: hippocampus search failed')
+        opts.logger?.warn({ error: errMsg(err) }, 'memory recall: hippocampus reflection failed')
         return null
       },
     ),
@@ -62,22 +67,35 @@ export async function recallMemory(query: string, opts: MemoryRecallOptions = {}
 
   const parts: string[] = []
 
-  const results: HippoResult[] = Array.isArray(notes?.results) ? notes.results : []
+  // Older kernels do not expose /reflect. Retain flat search as a fail-soft
+  // compatibility path while deployments roll forward.
+  const notes = reflection ?? await fetchJson(
+    `${kernelUrl}/api/v1/hippocampus/search?q=${q}&limit=${limit}`,
+    headers,
+    timeoutMs,
+  ).catch(() => null)
+  const results: HippoResult[] = Array.isArray(notes?.nodes)
+    ? notes.nodes
+    : Array.isArray(notes?.results) ? notes.results : []
   if (results.length > 0) {
     // Top hits get their full bodies (capped), not just one-line headlines —
     // a 240-char description wastes the semantic ranking. The direct note
     // read also chains the strongest MEMORY_RECALL signal for Φ consolidation.
-    const bodies = await Promise.all(
-      results.slice(0, 2).map((r) =>
-        fetchNoteBody(kernelUrl, headers, timeoutMs, r.slug).catch(() => null),
-      ),
-    )
+    const bodies = await Promise.all(results.slice(0, 2).map((r) => r.body
+      ? Promise.resolve(r.body)
+      : fetchNoteBody(kernelUrl, headers, timeoutMs, r.slug).catch(() => null)))
     const lines = results.map((r, i) => {
       const body = i < bodies.length ? bodies[i] : null
-      const head = `- ${r.name} (${r.type}): ${oneLine(r.description)}`
+      const trail = Array.isArray(r.path) && r.path.length > 1
+        ? ` — association: ${r.path.join(' → ')}`
+        : ''
+      const head = `- ${r.name} (${r.type}): ${oneLine(r.description)}${trail}`
       return body ? `${head}\n${indent(body)}` : head
     })
-    parts.push(`### Relevant shared memory (jarvis-OS hippocampus)\n${lines.join('\n')}`)
+    const heading = Array.isArray(notes?.nodes)
+      ? '### Associative reflection (jarvis-OS hippocampus)'
+      : '### Relevant shared memory (jarvis-OS hippocampus)'
+    parts.push(`${heading}\n${lines.join('\n')}`)
   }
 
   const rows: ProjectRow[] = Array.isArray(projects?.rows) ? projects.rows : []
@@ -106,13 +124,13 @@ async function fetchJson(
   url: string,
   headers: Record<string, string>,
   timeoutMs: number,
-): Promise<{ results?: HippoResult[]; rows?: ProjectRow[] } | null> {
+): Promise<{ results?: HippoResult[]; nodes?: HippoResult[]; rows?: ProjectRow[] } | null> {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeoutMs)
   try {
     const res = await fetch(url, { headers, signal: ctrl.signal })
     if (!res.ok) return null
-    return (await res.json()) as { results?: HippoResult[]; rows?: ProjectRow[] }
+    return (await res.json()) as { results?: HippoResult[]; nodes?: HippoResult[]; rows?: ProjectRow[] }
   } finally {
     clearTimeout(t)
   }

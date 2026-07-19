@@ -23,9 +23,9 @@ describe('memory recall (Fix 3)', () => {
   it('formats hippocampus notes + active projects into a memory block', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: string | URL | Request) => {
       const u = String(url)
-      if (u.includes('/hippocampus/search')) {
+      if (u.includes('/hippocampus/reflect')) {
         return new Response(
-          JSON.stringify({ results: [{ slug: 'a', name: 'Repair Loop', description: 'daily repair', type: 'project' }] }),
+          JSON.stringify({ nodes: [{ slug: 'a', name: 'Repair Loop', description: 'daily repair', type: 'project', path: ['purpose', 'repair-loop'] }] }),
           { status: 200 },
         )
       }
@@ -38,6 +38,8 @@ describe('memory recall (Fix 3)', () => {
     const block = await recallMemory('how does the repair loop work')
     expect(block).toContain('Memory check')
     expect(block).toContain('Repair Loop')
+    expect(block).toContain('purpose → repair-loop')
+    expect(block).toContain('Associative reflection')
     expect(block).toContain('memory-graphify')
     expect(block).toContain('next: write gate qs')
   })
@@ -45,7 +47,7 @@ describe('memory recall (Fix 3)', () => {
   it('drops done/archived projects', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: string | URL | Request) => {
       const u = String(url)
-      if (u.includes('/hippocampus/search')) return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      if (u.includes('/hippocampus/reflect')) return new Response(JSON.stringify({ nodes: [] }), { status: 200 })
       return new Response(JSON.stringify({ rows: [{ project: 'old', status: 'done', summary: 'x' }] }), { status: 200 })
     })
     expect(await recallMemory('anything')).toBe('')

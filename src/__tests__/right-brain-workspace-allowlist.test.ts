@@ -122,7 +122,11 @@ describe('right-brain-workspace allowlist (W7-T4 — AC7.4 + AC7.5)', () => {
         !e.relPath.startsWith('.openclaw/') &&
         e.relPath !== '.openclaw' &&
         !e.relPath.startsWith('tmp/') &&
-        e.relPath !== 'tmp',
+        e.relPath !== 'tmp' &&
+        // Newer OpenClaw releases stamp a setup marker at the workspace root
+        // (69-byte {version, setupCompletedAt}) — OpenClaw-managed state, same
+        // spirit as .openclaw/, observed appearing 2026-07-18.
+        e.relPath !== 'openclaw-workspace-state.json',
     )
     expect(stray, `unexpected regular files: ${stray.map((s) => s.relPath).join(', ')}`).toEqual([])
   })
