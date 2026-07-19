@@ -1,8 +1,9 @@
 import type { FastifyBaseLogger } from 'fastify'
 import { join } from 'node:path'
 import { spawnClaude } from '../claude/spawner.js'
-import { spawnClaudeStream } from '../claude/spawner-stream.js'
-import type { SpawnResult } from '../claude/types.js'
+import { spawnClaudeStream, type StreamSpawnCallbacks } from '../claude/spawner-stream.js'
+import { DailySession, type SessionForTurn } from '../claude/daily-session.js'
+import type { SpawnOptions, SpawnResult } from '../claude/types.js'
 import { formatStreamEvent, type StreamEvent } from '../claude/stream-formatter.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
@@ -153,8 +154,14 @@ export interface ProcessorConfig {
   claudePath: string
   claudeModel: string
   claudeTimeoutMs: number
-  /** Bridge working directory — cwd for every Claude spawn, anchor for history path. */
+  /** Bridge working directory — anchor for history/state paths. */
   workingDir: string
+  /**
+   * Cwd for Claude spawns. Pointing this at the OpenClaw workspace gives the
+   * spawned CLI the same CLAUDE.md + auto-memory context a terminal session
+   * there gets. Falls back to workingDir (legacy behavior) when unset.
+   */
+  spawnCwd?: string
   /** Display name of this node — injected into Claude's system context. */
   nodeName: string
   /** Telegram bot username (no @) this node serves. */
@@ -275,6 +282,8 @@ export class MessageProcessor {
   /** W13: messageId → kernel session id (cluster), so outbound emits get tagged + heartbeat fires on process_end. */
   private readonly sessionIdByMessageId: Map<string, string> = new Map()
   private readonly modeState: ModeState
+  /** Daily Claude CLI session — one per NY calendar day; see daily-session.ts. */
+  private readonly dailySession: DailySession
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
     this.config = config
@@ -296,6 +305,9 @@ export class MessageProcessor {
       config.defaultMode ?? 'single',
       join(config.workingDir, '.data', 'mode-state.json'),
     )
+    this.dailySession = new DailySession(
+      join(config.workingDir, '.data', 'daily-session.json'),
+    )
 
     // Build orchestrator (if dual-brain enabled). Respects injected override for tests.
     if (config.orchestrator) {
@@ -304,7 +316,7 @@ export class MessageProcessor {
       const leftClient = new LeftHemisphereClient({
         claudePath: config.claudePath,
         model: config.claudeModel,
-        workingDir: config.workingDir,
+        workingDir: config.spawnCwd ?? config.workingDir,
         logger: this.log,
       })
       // W17.2 — fast cap supersedes the legacy CORPUS_CALLOSUM_TIMEOUT_MS env.
@@ -787,6 +799,68 @@ export class MessageProcessor {
     return false
   }
 
+  /**
+   * Session-aware prompt build for a single-brain turn: first turn of the
+   * day gets the full static context + daily start brief; later turns of
+   * the same CLI session send only the per-turn blocks.
+   */
+  private async buildSessionPrompt(
+    msgText: string,
+    session: SessionForTurn | null,
+  ): Promise<string> {
+    return this.promptBuilder.build(
+      msgText,
+      session ? { sessionMode: session.isNew ? 'fresh' : 'resumed' } : {},
+    )
+  }
+
+  /**
+   * Single-brain spawn with daily-session continuity. Turns create/resume
+   * today's CLI session so tool results and conclusions accumulate across
+   * Telegram messages the way a terminal session accumulates them. A failed
+   * --resume (evicted/corrupt session) rotates the id and retries once as a
+   * fresh session — a stale state file can never wedge replies. Timeouts do
+   * NOT retry (that would double the wait on an already-slow turn).
+   */
+  private async spawnSingleBrainTurn(
+    msgText: string,
+    prompt: string,
+    session: SessionForTurn | null,
+    opts: Pick<
+      SpawnOptions,
+      'claudePath' | 'model' | 'timeoutMs' | 'enableTools' | 'enableSlashCommands'
+    > &
+      StreamSpawnCallbacks,
+  ): Promise<SpawnResult> {
+    const workingDir = this.config.spawnCwd ?? this.config.workingDir
+    let result = await spawnClaudeStream(prompt, {
+      ...opts,
+      workingDir,
+      sessionId: session?.sessionId,
+      resumeSession: session ? !session.isNew : undefined,
+    })
+    if (session && !session.isNew && !result.timedOut && result.exitCode !== 0) {
+      this.log.warn(
+        {
+          event: 'daily_session_resume_failed',
+          sessionId: session.sessionId,
+          exitCode: result.exitCode,
+          stderr: result.stderr.slice(0, 300),
+        },
+        'daily session resume failed — rotating to a fresh session',
+      )
+      const fresh = this.dailySession.rotate()
+      const freshPrompt = await this.buildSessionPrompt(msgText, fresh)
+      result = await spawnClaudeStream(freshPrompt, {
+        ...opts,
+        workingDir,
+        sessionId: fresh.sessionId,
+        resumeSession: false,
+      })
+    }
+    return result
+  }
+
   private async processSingleBrainLegacy(
     msg: QueueMessage,
     processStart: number,
@@ -803,13 +877,16 @@ export class MessageProcessor {
     }, ACK_DELAY_MS)
 
     try {
-      const prompt = await this.promptBuilder.build(msg.text)
+      const fastLane = this.isFastLaneKind(kind)
+      const session = fastLane ? null : this.dailySession.forTurn()
+      const prompt = await this.buildSessionPrompt(msg.text, session)
       this.log.info(
         {
           event: 'prompt_built',
           messageId: msg.id,
           promptLength: prompt.length,
           historyEntriesUsed: this.history.getRecent(10).length,
+          dailySession: session ? { id: session.sessionId, isNew: session.isNew } : null,
         },
         'prompt built',
       )
@@ -836,7 +913,6 @@ export class MessageProcessor {
         metadata: { promptLength: prompt.length },
       })
 
-      const fastLane = this.isFastLaneKind(kind)
       // 2026-04-25 — legacy path also streams tool events so a long tool-heavy
       // turn (e.g. cross-machine SSH fix) doesn't go silent for minutes when
       // the evolving UX has fallen back. Posts a fresh standalone progress
@@ -846,10 +922,9 @@ export class MessageProcessor {
       let lastProgressPostedAt = 0
       let lastProgressPostedStatus: string | null = null
       const LEGACY_PROGRESS_INTERVAL_MS = 60_000
-      const result = await spawnClaudeStream(prompt, {
+      const result = await this.spawnSingleBrainTurn(msg.text, prompt, session, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
-        workingDir: this.config.workingDir,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
         // W8.7.1 — tools off on the chitchat fast lanes.
         enableTools: fastLane ? false : undefined,
@@ -981,13 +1056,16 @@ export class MessageProcessor {
     const stopTyping = responder.startTyping(msg.chatId)
 
     try {
-      const prompt = await this.promptBuilder.build(msg.text)
+      const fastLane = this.isFastLaneKind(kind)
+      const session = fastLane ? null : this.dailySession.forTurn()
+      const prompt = await this.buildSessionPrompt(msg.text, session)
       this.log.info(
         {
           event: 'prompt_built',
           messageId: msg.id,
           promptLength: prompt.length,
           historyEntriesUsed: this.history.getRecent(10).length,
+          dailySession: session ? { id: session.sessionId, isNew: session.isNew } : null,
         },
         'prompt built',
       )
@@ -1015,16 +1093,14 @@ export class MessageProcessor {
         metadata: { promptLength: prompt.length, ux: 'evolving' },
       })
 
-      const fastLane = this.isFastLaneKind(kind)
       // W8.8.5 — stream tool-use events to the bubble so the user sees what
       // Claude is doing instead of staring at a 5-minute "Thinking…" label.
       // Each tool_use event maps to a status line via formatStreamEvent;
       // updatePhase is debounced inside the responder so Telegram's edit
       // limit isn't an issue.
-      const result = await spawnClaudeStream(prompt, {
+      const result = await this.spawnSingleBrainTurn(msg.text, prompt, session, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
-        workingDir: this.config.workingDir,
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
         enableTools: fastLane ? false : undefined,
         enableSlashCommands: fastLane ? false : undefined,

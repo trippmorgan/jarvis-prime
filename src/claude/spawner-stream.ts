@@ -45,6 +45,9 @@ export async function spawnClaudeStream(
     '--model', model,
     '--dangerously-skip-permissions',
   ]
+  if (opts.sessionId) {
+    args.push(opts.resumeSession ? '--resume' : '--session-id', opts.sessionId)
+  }
   if (!enableTools) args.push('--tools', '')
   if (!enableSlashCommands) args.push('--disable-slash-commands')
 

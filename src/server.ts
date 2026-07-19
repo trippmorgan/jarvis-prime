@@ -122,6 +122,7 @@ export async function buildServer(config: Config): Promise<ServerContext> {
       claudeModel: config.CLAUDE_MODEL,
       claudeTimeoutMs: config.CLAUDE_TIMEOUT_MS,
       workingDir: config.JARVIS_WORKING_DIR,
+      spawnCwd: config.JARVIS_SPAWN_CWD ?? config.WORKSPACE_DIR,
       nodeName: config.JARVIS_NODE_NAME,
       botUsername: config.TELEGRAM_BOT_USERNAME,
       corpusCallosumEnabled: config.CORPUS_CALLOSUM_ENABLED,

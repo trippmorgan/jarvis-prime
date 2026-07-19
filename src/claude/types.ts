@@ -19,6 +19,14 @@ export interface SpawnOptions {
    * from invoking slash commands.
    */
   enableSlashCommands?: boolean;
+  /**
+   * Daily-session continuity. When set with `resumeSession: false` the CLI
+   * creates the session under this UUID (`--session-id`); with
+   * `resumeSession: true` it continues it (`--resume`), carrying the whole
+   * day's conversation and tool context forward. Omit for a stateless spawn.
+   */
+  sessionId?: string;
+  resumeSession?: boolean;
 }
 
 export interface SpawnUsage {

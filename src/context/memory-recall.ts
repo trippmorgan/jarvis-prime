@@ -64,7 +64,19 @@ export async function recallMemory(query: string, opts: MemoryRecallOptions = {}
 
   const results: HippoResult[] = Array.isArray(notes?.results) ? notes.results : []
   if (results.length > 0) {
-    const lines = results.map((r) => `- ${r.name} (${r.type}): ${oneLine(r.description)}`)
+    // Top hits get their full bodies (capped), not just one-line headlines —
+    // a 240-char description wastes the semantic ranking. The direct note
+    // read also chains the strongest MEMORY_RECALL signal for Φ consolidation.
+    const bodies = await Promise.all(
+      results.slice(0, 2).map((r) =>
+        fetchNoteBody(kernelUrl, headers, timeoutMs, r.slug).catch(() => null),
+      ),
+    )
+    const lines = results.map((r, i) => {
+      const body = i < bodies.length ? bodies[i] : null
+      const head = `- ${r.name} (${r.type}): ${oneLine(r.description)}`
+      return body ? `${head}\n${indent(body)}` : head
+    })
     parts.push(`### Relevant shared memory (jarvis-OS hippocampus)\n${lines.join('\n')}`)
   }
 
@@ -104,6 +116,28 @@ async function fetchJson(
   } finally {
     clearTimeout(t)
   }
+}
+
+const NOTE_BODY_MAX_CHARS = 900
+
+async function fetchNoteBody(
+  kernelUrl: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  slug: string,
+): Promise<string | null> {
+  const note = (await fetchJson(
+    `${kernelUrl}/api/v1/hippocampus/notes/${encodeURIComponent(slug)}`,
+    headers,
+    timeoutMs,
+  )) as { body?: string } | null
+  const body = typeof note?.body === 'string' ? note.body.trim() : ''
+  if (!body) return null
+  return body.length > NOTE_BODY_MAX_CHARS ? `${body.slice(0, NOTE_BODY_MAX_CHARS)}…` : body
+}
+
+function indent(s: string): string {
+  return s.split('\n').map((l) => `  ${l}`).join('\n')
 }
 
 function oneLine(s: string): string {

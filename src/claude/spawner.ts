@@ -29,6 +29,9 @@ export async function spawnClaude(
     "--model", model,
     "--dangerously-skip-permissions",
   ];
+  if (opts?.sessionId) {
+    args.push(opts.resumeSession ? "--resume" : "--session-id", opts.sessionId);
+  }
   if (!enableTools) {
     args.push("--tools", "");
   }

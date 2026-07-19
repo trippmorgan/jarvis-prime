@@ -45,6 +45,12 @@ const baseSchema = z.object({
   // on Argus, /home/djjarvis/... on Pretoria) to keep the harness on a clean
   // upstream tag without per-node source forks.
   JARVIS_WORKING_DIR: z.string().default("/home/tripp/.openclaw/workspace/jarvis-prime/"),
+  // Cwd for Claude spawns (single-brain + left hemisphere). Defaults to
+  // WORKSPACE_DIR so the spawned CLI wakes up with the same CLAUDE.md +
+  // auto-memory a terminal session in the workspace gets — the bridge's own
+  // state files stay anchored at JARVIS_WORKING_DIR. Set explicitly on nodes
+  // whose workspace lives elsewhere.
+  JARVIS_SPAWN_CWD: z.string().optional(),
   // Display name of this node — fed into Claude's system context every turn so
   // the model knows it's Argus / DJ Jarvis / etc, not always Prime.
   JARVIS_NODE_NAME: z.string().default("Jarvis Prime"),
