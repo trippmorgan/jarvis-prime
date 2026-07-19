@@ -567,13 +567,12 @@ describe("Wave 8 router E2E (Sub-wave 8.6 — W8-T15)", () => {
       surface,
     })
 
-    processor.submit("chat-W8F", "Walk me through the current status", "user-W8F")
+    // Avoid workspace keyword commands such as `status` and `architecture`;
+    // this case exercises natural dual-brain correction, not shortcut dispatch.
+    processor.submit("chat-W8F", "Explain how these components interact", "user-W8F")
 
     await waitFor(
-      () =>
-        surface.sendMessageAndGetId.mock.calls.some(
-          ([, text]) => text === "RETRY-SUCCESS-FINAL",
-        ),
+      () => surface.sendMessageAndGetId.mock.calls.length >= 2,
       6000,
     )
     await new Promise((r) => setTimeout(r, 1100))

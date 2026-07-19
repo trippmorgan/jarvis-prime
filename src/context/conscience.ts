@@ -12,6 +12,7 @@
  * prompt is byte-identical to the pre-conscience era. Cached 60s.
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -44,6 +45,7 @@ interface ConscienceSnapshot {
   schemaVersion?: number
   snapshotHash?: string
   generatedAt?: string
+  sourceScoredAt?: string
   /** v2 chambers; `items` is retained as the v1-compatible normative list. */
   normative?: ConscienceItem[]
   reflective?: ReflectiveItem[]
@@ -54,6 +56,7 @@ interface ConscienceSnapshot {
 const BODY_MAX_CHARS = 450
 const TOTAL_MAX_CHARS = 6_000
 const CACHE_MS = 60_000
+const STALE_AFTER_MS = 36 * 60 * 60 * 1000
 
 let cache: { block: string; readAt: number } = { block: '', readAt: 0 }
 
@@ -69,6 +72,10 @@ export function conscienceBlock(): string {
     const snapshot = JSON.parse(
       readFileSync(join(cfgDir, 'conscience', 'current.json'), 'utf8'),
     ) as ConscienceSnapshot
+    if (!verifyConscienceSnapshot(snapshot)) {
+      cache = { block: '', readAt: Date.now() }
+      return ''
+    }
     const normative = Array.isArray(snapshot.normative)
       ? snapshot.normative
       : Array.isArray(snapshot.items) ? snapshot.items : []
@@ -76,11 +83,20 @@ export function conscienceBlock(): string {
     const resolved = Array.isArray(snapshot.resolved) ? snapshot.resolved : []
     if (snapshot.snapshotHash && (normative.length > 0 || reflective.length > 0 || resolved.length > 0)) {
       const lines: string[] = [
-        '## Conscience — chain-attested working memory',
-        `Selected nightly by Φ consolidation, attested on the jarvis ledger`,
+        '## Conscience — hash-verified, chain-attested working memory',
+        `Selected nightly by Φ consolidation; integrity verified before prompt injection`,
         `(snapshot ${snapshot.snapshotHash.slice(0, 16)}…). Two chambers, different weight.`,
         '',
       ]
+      const generatedMs = Date.parse(snapshot.generatedAt ?? '')
+      if (!Number.isFinite(generatedMs) || Date.now() - generatedMs > STALE_AFTER_MS) {
+        lines.push(
+          '⚠️ REFLECTIVE STATE IS STALE: durable principles still apply, but recent-failure',
+          'and resolution claims may be out of date. Rebuild the conscience before relying',
+          'on it as a picture of current system health.',
+          '',
+        )
+      }
       let budget = TOTAL_MAX_CHARS
 
       if (normative.length > 0) {
@@ -146,6 +162,41 @@ export function conscienceBlock(): string {
   }
   cache = { block, readAt: Date.now() }
   return block
+}
+
+/** Verify the exact producer hash before any conscience content enters a prompt. */
+export function verifyConscienceSnapshot(snapshot: ConscienceSnapshot): boolean {
+  if (!snapshot || typeof snapshot !== 'object') return false
+  if (typeof snapshot.snapshotHash !== 'string' || !/^[0-9a-f]{64}$/.test(snapshot.snapshotHash)) {
+    return false
+  }
+  let payload: object
+  if (snapshot.schemaVersion === 2) {
+    if (!Array.isArray(snapshot.normative) || !Array.isArray(snapshot.reflective) || !Array.isArray(snapshot.resolved)) {
+      return false
+    }
+    payload = {
+      schemaVersion: 2,
+      generatedAt: snapshot.generatedAt,
+      sourceScoredAt: snapshot.sourceScoredAt,
+      normative: snapshot.normative,
+      reflective: snapshot.reflective,
+      resolved: snapshot.resolved,
+    }
+  } else if (snapshot.schemaVersion === 1) {
+    if (!Array.isArray(snapshot.items)) return false
+    payload = {
+      schemaVersion: 1,
+      generatedAt: snapshot.generatedAt,
+      sourceScoredAt: snapshot.sourceScoredAt,
+      items: snapshot.items,
+    }
+  } else {
+    return false
+  }
+  const actual = createHash('sha256').update(JSON.stringify(payload)).digest()
+  const expected = Buffer.from(snapshot.snapshotHash, 'hex')
+  return expected.length === actual.length && timingSafeEqual(actual, expected)
 }
 
 /** Test hook. */
