@@ -147,6 +147,9 @@ export async function buildServer(config: Config): Promise<ServerContext> {
     server.log,
   )
 
+  // Something on the mesh probes /health daily and got 404 for months.
+  server.get("/health", async () => ({ ok: true, service: "jarvis-prime", uptimeSec: Math.round(process.uptime()) }))
+
   server.get("/status", async () => ({
     ok: true,
     version: "0.1.0",

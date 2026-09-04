@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
+import { attestEgress } from '../ledger/egress.js'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { FastifyBaseLogger } from 'fastify'
@@ -172,6 +173,25 @@ export class TelegramPoller {
    * recovered" and resets.
    */
   private async fetchTelegram(path: string, body: object, ctx: object): Promise<Response | null> {
+    const res = await this.fetchTelegramRaw(path, body, ctx)
+    // Ledger: every message-bearing call is an EGRESS entry on the jarvis
+    // chain (2026-09-04). Fire-and-forget — never delays or fails the send.
+    if (path === 'sendMessage' || path === 'editMessageText') {
+      const b = body as { chat_id?: unknown; text?: unknown }
+      if (typeof b.text === 'string' && b.chat_id !== undefined) {
+        const outcome = res === null ? 'failed' : res.ok ? 'sent' : path === 'editMessageText' && res.status === 400 ? 'skipped' : 'failed'
+        void attestEgress({
+          chatId: String(b.chat_id),
+          text: b.text,
+          outcome,
+          purpose: path === 'sendMessage' ? 'reply' : 'reply-edit',
+        }).catch(() => undefined)
+      }
+    }
+    return res
+  }
+
+  private async fetchTelegramRaw(path: string, body: object, ctx: object): Promise<Response | null> {
     const url = `${this.apiBase}/${path}`
     const init: RequestInit = {
       method: 'POST',
