@@ -36,6 +36,11 @@ const baseSchema = z.object({
   // Telegram; flipping it to false (+ restart) is what hands the bot to
   // Prime, mirroring `jarvis-toggle prime`. Default false (poll if token).
   JARVIS_TELEGRAM_DISABLED: boolFromEnv(false),
+  // 2026-09-04 fast lane by default + background jobs (see bridge/processor.ts).
+  JARVIS_FAST_LANE_DEFAULT: boolFromEnv(true),
+  JARVIS_JOB_TIMEOUT_MS: z.coerce.number().default(1_800_000),
+  JARVIS_JOB_TICK_MS: z.coerce.number().default(30_000),
+  JARVIS_JOB_MAX_CONCURRENT: z.coerce.number().default(3),
   TRIPP_CHAT_ID: z.string().default("8048875001"),
   WORKSPACE_DIR: z.string().default("/home/tripp/.openclaw/workspace"),
   DELIVERY_QUEUE_DIR: z.string().default("/home/tripp/.openclaw/delivery-queue"),

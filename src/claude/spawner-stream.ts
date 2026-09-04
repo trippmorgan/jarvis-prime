@@ -47,6 +47,7 @@ export async function spawnClaudeStream(
   ]
   if (opts.sessionId) {
     args.push(opts.resumeSession ? '--resume' : '--session-id', opts.sessionId)
+    if (opts.resumeSession && opts.forkSession) args.push('--fork-session')
   }
   if (!enableTools) args.push('--tools', '')
   if (!enableSlashCommands) args.push('--disable-slash-commands')
@@ -55,7 +56,9 @@ export async function spawnClaudeStream(
 
   return new Promise<SpawnResult>((resolve) => {
     let timedOut = false
+    let aborted = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let killTimer: ReturnType<typeof setTimeout> | undefined
     let stdoutBuf = ''
     let resultText = ''
     let usage: SpawnUsage | undefined
@@ -72,6 +75,17 @@ export async function spawnClaudeStream(
 
     child.stdin.write(prompt)
     child.stdin.end()
+
+    const onAbort = (): void => {
+      if (aborted) return
+      aborted = true
+      child.kill('SIGTERM')
+      killTimer = setTimeout(() => child.kill('SIGKILL'), 5_000)
+    }
+    if (opts.signal) {
+      if (opts.signal.aborted) onAbort()
+      else opts.signal.addEventListener('abort', onAbort, { once: true })
+    }
 
     child.stdout.setEncoding('utf-8')
     child.stdout.on('data', (chunk: string) => {
@@ -141,6 +155,8 @@ export async function spawnClaudeStream(
 
     child.on('close', (code) => {
       if (timer) clearTimeout(timer)
+      if (killTimer) clearTimeout(killTimer)
+      opts.signal?.removeEventListener('abort', onAbort)
       const durationMs = Math.round(performance.now() - start)
       const output = resultText || textBlocks.join('\n')
       resolve({
@@ -149,6 +165,7 @@ export async function spawnClaudeStream(
         exitCode: code ?? 1,
         durationMs,
         timedOut,
+        aborted,
         usage,
         costUsd,
         modelResolved,

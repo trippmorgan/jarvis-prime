@@ -29,6 +29,9 @@ import { makeRightClient } from '../brain/right-client-factory.js'
 import { Tier0Classifier, type Tier0Result } from '../brain/tier0-classifier.js'
 import { randomUUID } from 'node:crypto'
 import { ModeState, type Mode } from './mode-state.js'
+import { detectIntent, jobTitle } from '../brain/intent.js'
+import { JobManager } from '../jobs/job-manager.js'
+import { attestProcessRun } from '../ledger/egress.js'
 import {
   NoopReporter,
   type Reporter,
@@ -63,6 +66,13 @@ import {
 
 const ACK_DELAY_MS = 8_000
 const HARD_TIMEOUT_MS = 900_000
+// 2026-09-04 fast-lane-by-default: a tools-off reply should never take
+// longer than this; anything heavier is a job.
+const FAST_LANE_TIMEOUT_MS = 120_000
+const DEFAULT_JOB_TIMEOUT_MS = 30 * 60_000
+const DUAL_OFFER_TTL_MS = 15 * 60_000
+const DUAL_OFFER_FOOTER =
+  '_This one may deserve longer consideration. Say "dual brain" and I\'ll take it deeper in the background._'
 const TELEGRAM_MAX_LENGTH = 4096
 const HISTORY_RELATIVE_PATH = '.data/conversation-history.jsonl'
 // B7 (SPEC §Q1 lock 2026-06-06): append-only TRUTH layer alongside the
@@ -213,6 +223,18 @@ export interface ProcessorConfig {
    */
   routerEnabled?: boolean
   /**
+   * 2026-09-04 fast-lane-by-default (Tripp): natural messages answer in
+   * seconds with tools off; imperatives/diagnoses become monitored
+   * background jobs; `status`/`stop` control them; dual brain only on
+   * request or by accepted offer. Opt-in so the pre-existing suite keeps
+   * its semantics; production passes JARVIS_FAST_LANE_DEFAULT (default on).
+   */
+  fastLaneDefaultEnabled?: boolean
+  /** Background job ceiling (default 30 min). Jobs are not killed at claudeTimeoutMs. */
+  jobTimeoutMs?: number
+  jobTickMs?: number
+  jobMaxConcurrent?: number
+  /**
    * W8-T14 — optional skill shim injection (defaults to RightBrainSkillShim).
    * Only consumed when routerEnabled=true.
    */
@@ -284,6 +306,8 @@ export class MessageProcessor {
   private readonly modeState: ModeState
   /** Daily Claude CLI session — one per NY calendar day; see daily-session.ts. */
   private readonly dailySession: DailySession
+  private readonly jobManager: JobManager
+  private readonly pendingDualOffer = new Map<string, { text: string; at: number }>()
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
     this.config = config
@@ -308,6 +332,27 @@ export class MessageProcessor {
     this.dailySession = new DailySession(
       join(config.workingDir, '.data', 'daily-session.json'),
     )
+    this.jobManager = new JobManager({
+      surface: config.telegramSurface ?? null,
+      deliverLong: (chatId, text) => this.deliverChunks(chatId, text),
+      log: this.log,
+      tickMs: config.jobTickMs,
+      maxConcurrent: config.jobMaxConcurrent,
+      attest: (job) => {
+        const outcome = job.status === 'done' ? 'ok' : job.status === 'stopped' ? 'skipped' : job.status === 'timeout' ? 'partial' : 'failed'
+        void attestProcessRun({
+          process: job.kind === 'dual' ? 'prime-dual-brain-job' : 'prime-task-job',
+          outcome,
+          startedAt: new Date(job.startedAt),
+          durationMs: (job.endedAt ?? Date.now()) - job.startedAt,
+          artifact: job.output,
+        }).catch(() => undefined)
+      },
+      onFinished: (job) => {
+        // The day's fast-lane turns should know what the worker found.
+        this.history.append('assistant', `[Task #${job.id} ${job.status}] ${(job.output ?? '').slice(0, 4000)}`)
+      },
+    })
 
     // Build orchestrator (if dual-brain enabled). Respects injected override for tests.
     if (config.orchestrator) {
@@ -633,6 +678,47 @@ export class MessageProcessor {
       )
     }
 
+    // ── 2026-09-04 fast lane by default ─────────────────────────────────
+    // Decide in microseconds what this message IS before any brain runs:
+    // control word, dual-brain request, task (→ monitored job), deep
+    // question (→ fast answer + offer), or plain fast reply.
+    if (classification.kind === 'natural' && this.config.fastLaneDefaultEnabled === true) {
+      const pending = this.pendingDualOffer.get(msg.chatId)
+      const offerLive = !!pending && Date.now() - pending.at < DUAL_OFFER_TTL_MS
+      if (pending && !offerLive) this.pendingDualOffer.delete(msg.chatId)
+      const intent = detectIntent(msg.text, {
+        tier0: tier0 ? { topRoute: tier0.topRoute, topCosine: tier0.topCosine } : null,
+        pendingDualOffer: offerLive,
+      })
+      this.log.info(
+        { event: 'intent', messageId: msg.id, intent: intent.intent, reason: intent.reason, jobId: intent.jobId ?? null },
+        'intent',
+      )
+      trace.update({ metadata: { intent: intent.intent, intentReason: intent.reason } })
+      switch (intent.intent) {
+        case 'control_status':
+          return this.replyControl(msg, processStart, this.jobManager.statusText(msg.chatId))
+        case 'control_stop':
+          return this.replyControl(msg, processStart, await this.jobManager.stop(msg.chatId, intent.jobId))
+        case 'dual_explicit':
+          return this.startDualJob(msg, processStart, intent.stripped || msg.text)
+        case 'dual_accept': {
+          this.pendingDualOffer.delete(msg.chatId)
+          if (pending) return this.startDualJob(msg, processStart, pending.text)
+          break
+        }
+        case 'task':
+          return this.startTaskJob(msg, processStart)
+        case 'deep_offer':
+          this.pendingDualOffer.set(msg.chatId, { text: msg.text, at: Date.now() })
+          return this.processSingleBrain(msg, processStart, 'fast_default', DUAL_OFFER_FOOTER)
+        case 'fast':
+          // /deep on = Tripp asked for dual brain on everything; honour it.
+          if (this.modeState.current === 'dual' && this.orchestrator !== undefined && this.config.corpusCallosumEnabled) break
+          return this.processSingleBrain(msg, processStart, 'fast_default')
+      }
+    }
+
     const tier0Shortcut = tier0?.route === 'quick_q'
 
     // 2026-04-23 — Dual-brain is now opt-in via /deep. Default flow is
@@ -753,6 +839,94 @@ export class MessageProcessor {
    * single-brain fallback for a natural message (killswitch or orchestrator
    * absent) resolves to 'killswitch'.
    */
+  /** Deliver a control reply (status/stop) without spawning any brain. */
+  private async replyControl(msg: QueueMessage, processStart: number, text: string): Promise<string> {
+    this.history.append('assistant', text)
+    await this.deliver(msg.chatId, text).catch(() => {})
+    this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'legacy', text)
+    return text
+  }
+
+  /** Chunked delivery for job results (no per-message trace). */
+  private async deliverChunks(chatId: string, text: string): Promise<void> {
+    for (const chunk of splitMessage(text, TELEGRAM_MAX_LENGTH)) {
+      await this.deliver(chatId, chunk)
+    }
+  }
+
+  private jobBusyText(): string {
+    const n = this.jobManager.running().length
+    return `${n} jobs already running — say \`status\` to see them or \`stop #n\` to free a slot.`
+  }
+
+  /**
+   * Task → monitored background job on a forked copy of today's CLI
+   * session (tools on, job ceiling instead of the chat timeout). The queue
+   * returns immediately; the JobManager owns the monitor bubble and result.
+   */
+  private async startTaskJob(msg: QueueMessage, processStart: number): Promise<string> {
+    const daily = this.dailySession.forTurn()
+    const session: SessionForTurn = daily.isNew ? { sessionId: randomUUID(), isNew: true } : daily
+    const prompt = await this.buildSessionPrompt(msg.text, session)
+    const workingDir = this.config.spawnCwd ?? this.config.workingDir
+    const job = await this.jobManager.start({
+      chatId: msg.chatId,
+      title: jobTitle(msg.text),
+      kind: 'task',
+      agentLabel: `Prime worker · ${this.config.claudeModel} · tools on`,
+      run: async ({ signal, onActivity }) => {
+        const result = await spawnClaudeStream(prompt, {
+          claudePath: this.config.claudePath,
+          model: this.config.claudeModel,
+          timeoutMs: this.config.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS,
+          workingDir,
+          sessionId: session.sessionId,
+          resumeSession: !session.isNew,
+          forkSession: !session.isNew,
+          signal,
+          onEvent: (event) => {
+            if (event.type !== 'assistant') return
+            for (const block of event.message?.content ?? []) {
+              if (block.type === 'tool_use' && typeof block.name === 'string') onActivity(block.name)
+            }
+          },
+        })
+        return { output: result.output, timedOut: result.timedOut, aborted: result.aborted, exitCode: result.exitCode, stderr: result.stderr }
+      },
+    })
+    const text = job ? `Task #${job.id} is running in the background — I'll post the result here.` : this.jobBusyText()
+    if (!job) await this.deliver(msg.chatId, text).catch(() => {})
+    this.log.info({ event: 'task_job_started', messageId: msg.id, jobId: job?.id ?? null }, 'task job')
+    this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'legacy', text)
+    return text
+  }
+
+  /** Dual brain on request: the existing orchestrator, run as a monitored job. */
+  private async startDualJob(msg: QueueMessage, processStart: number, text: string): Promise<string> {
+    if (this.orchestrator === undefined || !this.config.corpusCallosumEnabled) {
+      this.log.warn({ event: 'dual_job_unavailable', messageId: msg.id }, 'dual brain requested but orchestrator is off — running as a task job')
+      return this.startTaskJob({ ...msg, text }, processStart)
+    }
+    const orchestrator = this.orchestrator
+    const job = await this.jobManager.start({
+      chatId: msg.chatId,
+      title: jobTitle(text),
+      kind: 'dual',
+      agentLabel: `Prime dual-brain · left ${this.config.claudeModel} · right ${this.config.rightModel}`,
+      run: async ({ signal }) => {
+        const basePrompt = await this.promptBuilder.build(text, { includeConversation: false })
+        const history = this.history.getRecentBeforeCurrent(text, 10)
+        const result = await orchestrator({ userMsg: text, history, basePrompt, chatId: msg.chatId })
+        return { output: result.finalText, aborted: signal.aborted }
+      },
+    })
+    const reply = job ? `Dual-brain task #${job.id} is running — both hemispheres on it, I'll post the integrated answer here.` : this.jobBusyText()
+    if (!job) await this.deliver(msg.chatId, reply).catch(() => {})
+    this.log.info({ event: 'dual_job_started', messageId: msg.id, jobId: job?.id ?? null }, 'dual job')
+    this.emitProcessEnd(msg.id, processStart, 'dual_brain', 'success', 'legacy', reply)
+    return reply
+  }
+
   private resolveSingleBrainKind(classificationKind: MessageKind): OrchestratorKind {
     if (classificationKind === 'slash') return 'slash'
     if (classificationKind === 'clinical') return 'clinical'
@@ -764,12 +938,13 @@ export class MessageProcessor {
     msg: QueueMessage,
     processStart: number,
     kind: OrchestratorKind,
+    footer?: string,
   ): Promise<string> {
     // Evolving-message path — attempt ack first; fall back to legacy if it fails.
     if (this.responder) {
       const msgId = await this.responder.postAck(msg.chatId, INITIAL_ACK_LABEL)
       if (msgId != null) {
-        return this.processSingleBrainEvolving(msg, processStart, kind, msgId)
+        return this.processSingleBrainEvolving(msg, processStart, kind, msgId, footer)
       }
       // Telegram send failed — fall through to legacy path.
       this.log.warn(
@@ -790,13 +965,11 @@ export class MessageProcessor {
    * Slash commands and clinical paths keep tools-on (slash paths route to
    * skills that need tools; clinical is for the /dispatch-to-clinical flow).
    */
-  private isFastLaneKind(_kind: OrchestratorKind): boolean {
-    // 2026-04-23 — tools-on everywhere per user directive. Single-brain still
-    // routes via short-msg / tier0 shortcuts (saves dual-brain latency), but
-    // every Claude spawn keeps tools + slash commands enabled so Prime can
-    // actually do shell work, MCP calls, etc. Re-enable fast-lane tools-off
-    // by returning the original `_kind === 'short_msg_fast_lane' || _kind === 'tier0_quick'`.
-    return false
+  private isFastLaneKind(kind: OrchestratorKind): boolean {
+    // 2026-04-23 — tools-on everywhere per user directive (short-msg / tier0
+    // lanes keep tools). 2026-09-04 — Tripp's newer directive: fast lane by
+    // default. Only the new default lane drops tools; real work is a job.
+    return kind === 'fast_default'
   }
 
   /**
@@ -1051,6 +1224,7 @@ export class MessageProcessor {
     processStart: number,
     kind: OrchestratorKind,
     ackMessageId: number,
+    footer?: string,
   ): Promise<string> {
     const responder = this.responder!
     const stopTyping = responder.startTyping(msg.chatId)
@@ -1098,10 +1272,13 @@ export class MessageProcessor {
       // Each tool_use event maps to a status line via formatStreamEvent;
       // updatePhase is debounced inside the responder so Telegram's edit
       // limit isn't an issue.
+      const laneTimeoutMs = fastLane
+        ? Math.min(this.config.claudeTimeoutMs, FAST_LANE_TIMEOUT_MS)
+        : Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS)
       const result = await this.spawnSingleBrainTurn(msg.text, prompt, session, {
         claudePath: this.config.claudePath,
         model: this.config.claudeModel,
-        timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
+        timeoutMs: laneTimeoutMs,
         enableTools: fastLane ? false : undefined,
         enableSlashCommands: fastLane ? false : undefined,
         onEvent: (event) => {
@@ -1153,7 +1330,7 @@ export class MessageProcessor {
       if (result.timedOut) {
         const partial = result.output.trim()
         const errorMsg = partial
-          ? `${partial}\n\n⏱ Hit the ${Math.round(Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS) / 60_000)}m timeout — partial output above. Pick up where I left off by asking me to continue.`
+          ? `${partial}\n\n⏱ Hit the ${Math.round(laneTimeoutMs / 60_000)}m timeout — partial output above. Pick up where I left off by asking me to continue.`
           : 'Request timed out with no output. Try breaking the task into smaller steps.'
         await responder.finalize(msg.chatId, ackMessageId, errorMsg)
         if (partial) this.history.append('assistant', partial)
@@ -1177,7 +1354,7 @@ export class MessageProcessor {
         return errorMsg
       }
 
-      const output = result.output.trim() || '(No output)'
+      const output = (result.output.trim() || '(No output)') + (footer ? `\n\n${footer}` : '')
       this.history.append('assistant', output)
       this.log.info(
         {

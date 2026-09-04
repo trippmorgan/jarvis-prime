@@ -18,6 +18,9 @@ export type OrchestratorKind =
   | 'killswitch'
   | 'tier0_quick'
   | 'short_msg_fast_lane'
+  // 2026-09-04 fast-lane-by-default: any natural message that is not a
+  // task, a control word, or a dual-brain request → tools-off single brain.
+  | 'fast_default'
 
 export const INITIAL_ACK_LABEL = 'Thinking…'
 

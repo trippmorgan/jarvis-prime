@@ -27,6 +27,10 @@ export interface SpawnOptions {
    */
   sessionId?: string;
   resumeSession?: boolean;
+  /** With resumeSession: continue from that session's history under a NEW id (`--fork-session`). Jobs use this so a background worker never writes into the daily session another turn may be resuming. */
+  forkSession?: boolean;
+  /** Abort → SIGTERM the child (SIGKILL 5 s later); result carries aborted:true. */
+  signal?: AbortSignal;
 }
 
 export interface SpawnUsage {
@@ -47,6 +51,8 @@ export interface SpawnResult {
   durationMs: number;
   /** True if the process was killed due to timeout */
   timedOut: boolean;
+  /** True when the caller's AbortSignal stopped the run (2026-09-04 jobs). */
+  aborted?: boolean;
   /** Token usage from the CLI's final `result` event, when present. */
   usage?: SpawnUsage;
   /** Total cost in USD as reported by the CLI (covers cache + standard pricing). */

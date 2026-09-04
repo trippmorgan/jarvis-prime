@@ -97,3 +97,45 @@ export async function attestEgress(input: EgressInput): Promise<number | null> {
 export function egressLedgerStatus(): { enabled: boolean; reason: string | null } {
   return { enabled: (process.env.JARVIS_LEDGER_EGRESS ?? 'on').toLowerCase() !== 'off' && disabledReason === null, reason: disabledReason }
 }
+
+/** PROCESS_RUN for a Prime background job (process `prime-job`). Fire-and-forget. */
+export async function attestProcessRun(input: {
+  process: string
+  outcome: 'ok' | 'failed' | 'skipped' | 'partial'
+  startedAt: Date
+  durationMs: number
+  exitCode?: number
+  artifact?: string
+}): Promise<number | null> {
+  if ((process.env.JARVIS_LEDGER_EGRESS ?? 'on').toLowerCase() === 'off') return null
+  const l = await lib()
+  if (!l) return null
+  try {
+    const env = l.readLedgerEnv({ ...process.env, PHI_LEDGER_MODE: 'jarvis' })
+    const opened = l.openChainForWriting(env)
+    try {
+      const payload: Record<string, unknown> = {
+        payload_version: 1,
+        process: input.process.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63) || 'prime-job',
+        node: 'superserver',
+        outcome: input.outcome,
+        started_at: input.startedAt.toISOString(),
+        duration_ms: Math.max(0, Math.round(input.durationMs)),
+        observed_at: new Date().toISOString(),
+      }
+      if (typeof input.exitCode === 'number' && input.exitCode >= 0) payload.exit_code = input.exitCode
+      if (typeof input.artifact === 'string' && input.artifact.length > 0) {
+        const bytes = Buffer.from(input.artifact, 'utf8')
+        payload.artifact_hash = crypto.createHash('sha256').update(bytes).digest('hex')
+        payload.artifact_bytes = bytes.length
+      }
+      opened.chain.append(opened.signer, 'PROCESS_RUN', payload)
+      return opened.chain.count()
+    } finally {
+      opened.db.close()
+    }
+  } catch (err) {
+    disabledReason = err instanceof Error ? err.message : String(err)
+    return null
+  }
+}
