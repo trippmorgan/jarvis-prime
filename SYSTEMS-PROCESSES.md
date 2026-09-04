@@ -132,3 +132,24 @@ When `execute:true`:
 Tier maps are mirrored in two places and **must stay in sync**:
 `execute.ts COMMAND_TIER` (TypeScript) and `commands.py COMMAND_TIER`
 (Python).
+
+---
+
+## Cognitive context process (every Prime reply)
+
+This is prompt context assembly, not an externally mutating workflow and not a
+human-approval gate:
+
+1. Verify the schema-v2 conscience snapshot hash and load standing principles,
+   recent failure lessons, and resolution evidence.
+2. Call authenticated Hippocampus `/reflect` with the current thought at
+   `depth=2`, receiving ranked memories and their association paths.
+3. Fall back to flat `/search` if reflection is unavailable; fail soft if the
+   kernel is down so recall can never prevent a reply.
+4. Build one shared base prompt. Single-brain, both dual-brain hemispheres, and
+   integration therefore see the same conscience and reflective context.
+5. After meaningful action, the wider Jarvis loop records recall evidence and
+   durable lessons for later consolidation.
+
+PHI-marked atoms never enter this process. See
+`jarvis-os/docs/guides/REFLECTION_CONSCIENCE.md` for the API and safety model.

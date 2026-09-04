@@ -263,7 +263,9 @@ const ALIAS_TO_AGENT: Record<string, string> = {
   prime:       'agent_orchestrator-prime-jarvis-os',
   frank:       'agent_heavy-compute-frank-self',
   scalpel:     'agent_clinical-ops-scalpel-self',
-  argus:       'agent_vision-security-argus-self',
+  // Argus migrated from the retired Mac Pro vision-security identity to
+  // the Mac mini's locally supervised orchestrator identity (2026-06).
+  argus:       'agent_orchestrator-local-argus-self',
   'dj-jarvis': 'agent_playout-orchestrator-dj-jarvis-self',
   openclaw:    'openclaw-codex',
 }

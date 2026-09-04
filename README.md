@@ -128,7 +128,7 @@ MessageProcessor
   ├── Router ─── classifyMessage({text, clinicalOverride}) → slash | clinical | natural
   │
   ├── slash / clinical / killswitch → Single-Brain path
-  │     ├── PromptBuilder ─── system context + skills + last 10 history + message
+  │     ├── PromptBuilder ─── conscience + associative memory + skills/history/message
   │     ├── spawnClaude ─── `claude --print --model sonnet` with timeout
   │     └── deliver + history.append('assistant', output)
   │
@@ -228,7 +228,9 @@ src/
 │   └── types.ts                SpawnOptions, SpawnResult
 ├── context/
 │   ├── history.ts              JSONL history (append, getRecent, formatForPrompt)
-│   └── prompt-builder.ts       Reads skill .md files, builds single-brain system prompt
+│   ├── conscience.ts           verifies schema-v2 hash; standing + reflective chambers
+│   ├── memory-recall.ts        depth-2 Hippocampus reflection; flat-search fallback
+│   └── prompt-builder.ts       assembles shared context for both reasoning paths
 ├── delivery/
 │   └── delivery-client.ts      POST to OpenClaw gateway (legacy), spool-on-failure
 ├── lieutenant/
@@ -344,14 +346,14 @@ npm run build        # tsc --noEmit equivalent (emits dist/)
 7. **Ack timer** — 8s timer starts. If no response yet, sends "Working on it..."
 
 ### Single-brain path (slash / clinical / killswitch)
-9a. **Prompt build** — PromptBuilder assembles: system context + skill instructions + last 10 history + current message
+9a. **Prompt build** — PromptBuilder assembles the verified conscience, associative Hippocampus reflection (including paths), system context, skill instructions, last 10 history entries, and current message. Conscience/memory retrieval fails softly and never blocks a reply.
 10a. **Claude spawn** — `claude --print --model sonnet` via child_process. Prompt piped via stdin
 11a. **Response** — Output captured from stdout. Ack timer cancelled
 12a. **Deliver** — Response sent via `sendMessage`. Over 4096 chars split at newline boundaries
 13a. **Assistant history append** — `{role: 'assistant', content: output}`
 
 ### Dual-brain path (natural language)
-9b. **Base prompt build** — PromptBuilder (reused) produces the shared `basePrompt` for the orchestrator's system blocks
+9b. **Base prompt build** — PromptBuilder (reused) produces the same conscience- and reflection-aware `basePrompt` for both hemispheres and integration.
 10b. **History slice** — `history.getRecent(10)` — both hemispheres will see the same slice
 11b. **PASS 1 parallel** (`Promise.all`):
    - left-p1 via `leftAffordancePrompt(basePrompt, history, userMsg)` → `LeftHemisphereClient.call()`

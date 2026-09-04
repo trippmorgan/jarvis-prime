@@ -12,6 +12,8 @@ const KERNEL_TOKEN = process.env.KERNEL_TOKEN ?? ''
 
 // The same set of lieutenant aliases used everywhere else. status fan-out
 // targets the canonical `-self` row for each node.
+// Argus's Mac-mini orchestrator runs the W16 consumer as of 2026-08-04 and
+// is safe to include alongside the other registry-visible lieutenants.
 const TARGETS = ['prime', 'frank', 'scalpel', 'argus', 'dj-jarvis'] as const
 
 interface AgentRow {
