@@ -118,7 +118,14 @@ export class TelegramResponder {
     state.pendingMessageId = messageId
   }
 
-  async finalize(chatId: string, messageId: number, text: string): Promise<void> {
+  /**
+   * Replace the evolving bubble with the final text. Returns false when the
+   * edit did not land (transport fault, or Telegram refused) so the caller
+   * can deliver the answer as a fresh message instead of losing it — which
+   * is what happened at 10:12 on 2026-09-04: 38 s of work, then a timed-out
+   * edit, and Tripp saw "Thinking…" forever.
+   */
+  async finalize(chatId: string, messageId: number, text: string): Promise<boolean> {
     const state = this.debounceByChat.get(chatId)
     if (state?.timer) {
       clearTimeout(state.timer)
@@ -128,12 +135,13 @@ export class TelegramResponder {
     this.lastTextByChat.delete(chatId)
 
     try {
-      await this.surface.editMessageText(chatId, messageId, text)
+      return await this.surface.editMessageText(chatId, messageId, text)
     } catch (err) {
       this.log.error(
         { chatId, messageId, error: err instanceof Error ? err.message : String(err) },
         'TelegramResponder.finalize error',
       )
+      return false
     }
   }
 

@@ -1364,7 +1364,12 @@ export class MessageProcessor {
         },
         'history assistant appended',
       )
-      await responder.finalize(msg.chatId, ackMessageId, output)
+      const finalized = await responder.finalize(msg.chatId, ackMessageId, output)
+      if (!finalized) {
+        // The bubble edit did not land — never lose a finished answer.
+        this.log.warn({ event: 'finalize_failed_fallback_send', messageId: msg.id }, 'final edit failed — sending the answer as a new message')
+        await this.deliverWithLogging(msg.id, msg.chatId, output, 'success').catch(() => {})
+      }
 
       this.log.info({
         messageId: msg.id,
@@ -1917,7 +1922,12 @@ export class MessageProcessor {
         // No pass-2 payload arrived (test stub or pre-pass-2 short-circuit) —
         // preserve the original behaviour: integrated answer goes into the
         // ack bubble.
-        await responder.finalize(msg.chatId, ackMessageId, output)
+        const finalized = await responder.finalize(msg.chatId, ackMessageId, output)
+      if (!finalized) {
+        // The bubble edit did not land — never lose a finished answer.
+        this.log.warn({ event: 'finalize_failed_fallback_send', messageId: msg.id }, 'final edit failed — sending the answer as a new message')
+        await this.deliverWithLogging(msg.id, msg.chatId, output, 'success').catch(() => {})
+      }
       }
 
       this.log.info(
