@@ -1,3 +1,6 @@
+import { existsSync, readdirSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { execFile as execFileCb } from "node:child_process"
 import { promisify } from "node:util"
 import type { HemisphereClient } from "./types.js"
@@ -38,8 +41,40 @@ export interface RightBrainAgentLogger {
 export type ExecFileFn = (
   file: string,
   args: readonly string[],
-  options: { timeout?: number; maxBuffer?: number },
+  options: { timeout?: number; maxBuffer?: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string }>
+
+/**
+ * The `openclaw` CLI refuses Node outside its engines range (>=22.22.3 <23,
+ * >=24.15 <25, >=25.9). PM2 runs Prime under a Node the CLI rejects, so every
+ * right-brain call died in 180 ms with "Node.js >=22.22.3 ... is required"
+ * and the turn fell through to the slow gateway path (2026-09-04). Prepend
+ * an acceptable nvm Node to PATH for the child only. Override with
+ * OPENCLAW_NODE_BIN_DIR.
+ */
+export function openclawChildEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const explicit = base.OPENCLAW_NODE_BIN_DIR
+  let dir = explicit && existsSync(explicit) ? explicit : undefined
+  if (!dir) {
+    const root = join(homedir(), ".nvm", "versions", "node")
+    try {
+      const ok = readdirSync(root)
+        .map((v) => v.replace(/^v/, "").split(".").map(Number))
+        .filter(([maj, min, pat]) =>
+          (maj === 22 && (min > 22 || (min === 22 && pat >= 3))) ||
+          (maj === 24 && min >= 15) ||
+          (maj === 25 && min >= 9) ||
+          maj > 25)
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2])
+      const best = ok.at(-1)
+      if (best) dir = join(root, `v${best.join(".")}`, "bin")
+    } catch {
+      /* no nvm — leave PATH alone */
+    }
+  }
+  if (!dir) return base
+  return { ...base, PATH: `${dir}:${base.PATH ?? ""}` }
+}
 
 export interface RightBrainAgentConfig {
   /** Agent name as registered with `openclaw agents add`. Default: "right-brain". */
@@ -149,6 +184,7 @@ export class RightBrainAgentClient implements HemisphereClient {
       const result = await this.exec(this.openclawBin, args, {
         timeout: timeoutMs,
         maxBuffer: MAX_BUFFER,
+        env: openclawChildEnv(),
       })
       stdout = result.stdout
       stderr = result.stderr
