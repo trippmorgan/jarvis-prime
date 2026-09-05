@@ -95,8 +95,21 @@ export async function buildServer(config: Config): Promise<ServerContext> {
       })
     : null
 
+  // A finished answer must not die on one bad socket: the poller already
+  // retries the transport once; this adds two more attempts with backoff
+  // (2 s, 6 s) for the sends that carry real content — job results, control
+  // replies, legacy-path answers (2026-09-05: two 1.5 KB replies failed at
+  // 20:01/20:05 ET with nothing behind them).
   const deliver = poller
-    ? async (chatId: string, text: string) => { await poller.sendMessage(chatId, text, 'Markdown') }
+    ? async (chatId: string, text: string) => {
+        const delays = [0, 2_000, 6_000]
+        for (let attempt = 0; attempt < delays.length; attempt++) {
+          if (delays[attempt] > 0) await new Promise((r) => setTimeout(r, delays[attempt]))
+          if (await poller.sendMessage(chatId, text, 'Markdown')) return
+          server.log.warn({ chatId, attempt: attempt + 1, textLength: text.length }, 'deliver: sendMessage failed')
+        }
+        server.log.error({ chatId, textLength: text.length }, 'deliver: giving up after 3 attempts')
+      }
     : async (chatId: string, text: string) => {
         server.log.warn({ chatId }, 'No Telegram poller — delivery skipped (HTTP-only mode)')
       }
