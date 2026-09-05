@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from 'fastify'
 import { join } from 'node:path'
 import { spawnClaude } from '../claude/spawner.js'
 import { spawnClaudeStream, type StreamSpawnCallbacks } from '../claude/spawner-stream.js'
+import { isMissingSessionResult } from '../claude/result.js'
 import { DailySession, type SessionForTurn } from '../claude/daily-session.js'
 import type { SpawnOptions, SpawnResult } from '../claude/types.js'
 import { formatStreamEvent, type StreamEvent } from '../claude/stream-formatter.js'
@@ -865,8 +866,11 @@ export class MessageProcessor {
    * returns immediately; the JobManager owns the monitor bubble and result.
    */
   private async startTaskJob(msg: QueueMessage, processStart: number): Promise<string> {
-    const daily = this.dailySession.forTurn()
-    const session: SessionForTurn = daily.isNew ? { sessionId: randomUUID(), isNew: true } : daily
+    // peek(), not forTurn(): a job that ran under its own id must not mint
+    // the day's session id — nothing would ever create it, and every later
+    // fork of it would fail with "No conversation found".
+    const daily = this.dailySession.peek()
+    const session: SessionForTurn = daily ?? { sessionId: randomUUID(), isNew: true }
     const prompt = await this.buildSessionPrompt(msg.text, session)
     const workingDir = this.config.spawnCwd ?? this.config.workingDir
     const job = await this.jobManager.start({
@@ -875,23 +879,35 @@ export class MessageProcessor {
       kind: 'task',
       agentLabel: `Prime worker · ${this.config.claudeModel} · tools on`,
       run: async ({ signal, onActivity }) => {
-        const result = await spawnClaudeStream(prompt, {
+        const spawnOpts = {
           claudePath: this.config.claudePath,
           model: this.config.claudeModel,
           timeoutMs: this.config.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS,
           workingDir,
-          sessionId: session.sessionId,
-          resumeSession: !session.isNew,
-          forkSession: !session.isNew,
           signal,
-          onEvent: (event) => {
+          onEvent: (event: StreamEvent) => {
             if (event.type !== 'assistant') return
             for (const block of event.message?.content ?? []) {
               if (block.type === 'tool_use' && typeof block.name === 'string') onActivity(block.name)
             }
           },
+        }
+        let result = await spawnClaudeStream(prompt, {
+          ...spawnOpts,
+          sessionId: session.sessionId,
+          resumeSession: !session.isNew,
+          forkSession: !session.isNew,
         })
-        return { output: result.output, timedOut: result.timedOut, aborted: result.aborted, exitCode: result.exitCode, stderr: result.stderr }
+        if (!session.isNew && isMissingSessionResult(result) && !signal.aborted) {
+          this.log.warn(
+            { event: 'task_session_resume_failed', sessionId: session.sessionId, errors: result.errors },
+            'task could not fork the daily session — rotating and creating a fresh one',
+          )
+          const fresh = this.dailySession.rotate()
+          const freshPrompt = await this.buildSessionPrompt(msg.text, fresh)
+          result = await spawnClaudeStream(freshPrompt, { ...spawnOpts, sessionId: fresh.sessionId, resumeSession: false })
+        }
+        return { output: result.output, timedOut: result.timedOut, aborted: result.aborted, exitCode: result.exitCode, stderr: result.stderr, isError: result.isError }
       },
     })
     const text = job ? `Task #${job.id} is running in the background — I'll post the result here.` : this.jobBusyText()
@@ -980,11 +996,12 @@ export class MessageProcessor {
   private async buildSessionPrompt(
     msgText: string,
     session: SessionForTurn | null,
+    toolsOff = false,
   ): Promise<string> {
-    return this.promptBuilder.build(
-      msgText,
-      session ? { sessionMode: session.isNew ? 'fresh' : 'resumed' } : {},
-    )
+    return this.promptBuilder.build(msgText, {
+      ...(session ? { sessionMode: session.isNew ? 'fresh' : 'resumed' } : {}),
+      toolsOff,
+    })
   }
 
   /**
@@ -1012,18 +1029,20 @@ export class MessageProcessor {
       sessionId: session?.sessionId,
       resumeSession: session ? !session.isNew : undefined,
     })
-    if (session && !session.isNew && !result.timedOut && result.exitCode !== 0) {
+    const resumeFailed = result.exitCode !== 0 || isMissingSessionResult(result)
+    if (session && !session.isNew && !result.timedOut && resumeFailed) {
       this.log.warn(
         {
           event: 'daily_session_resume_failed',
           sessionId: session.sessionId,
           exitCode: result.exitCode,
+          errors: result.errors,
           stderr: result.stderr.slice(0, 300),
         },
         'daily session resume failed — rotating to a fresh session',
       )
       const fresh = this.dailySession.rotate()
-      const freshPrompt = await this.buildSessionPrompt(msgText, fresh)
+      const freshPrompt = await this.buildSessionPrompt(msgText, fresh, opts.enableTools === false)
       result = await spawnClaudeStream(freshPrompt, {
         ...opts,
         workingDir,
@@ -1052,7 +1071,7 @@ export class MessageProcessor {
     try {
       const fastLane = this.isFastLaneKind(kind)
       const session = fastLane ? null : this.dailySession.forTurn()
-      const prompt = await this.buildSessionPrompt(msg.text, session)
+      const prompt = await this.buildSessionPrompt(msg.text, session, fastLane)
       this.log.info(
         {
           event: 'prompt_built',
@@ -1232,7 +1251,7 @@ export class MessageProcessor {
     try {
       const fastLane = this.isFastLaneKind(kind)
       const session = fastLane ? null : this.dailySession.forTurn()
-      const prompt = await this.buildSessionPrompt(msg.text, session)
+      const prompt = await this.buildSessionPrompt(msg.text, session, fastLane)
       this.log.info(
         {
           event: 'prompt_built',

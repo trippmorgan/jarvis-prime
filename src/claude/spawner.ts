@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { SpawnOptions, SpawnResult } from "./types.js";
+import { EMPTY_MCP_CONFIG, type SpawnOptions, type SpawnResult } from "./types.js";
 
 const DEFAULTS = {
   claudePath: "/home/tripp/.local/bin/claude",
@@ -33,7 +33,7 @@ export async function spawnClaude(
     args.push(opts.resumeSession ? "--resume" : "--session-id", opts.sessionId);
   }
   if (!enableTools) {
-    args.push("--tools", "");
+    args.push("--tools", "", "--strict-mcp-config", "--mcp-config", EMPTY_MCP_CONFIG);
   }
   if (!enableSlashCommands) {
     args.push("--disable-slash-commands");

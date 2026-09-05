@@ -175,7 +175,7 @@ describe("spawnClaude", () => {
         "--print",
         "--model", "sonnet",
         "--dangerously-skip-permissions",
-        "--tools", "",
+        "--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
         "--disable-slash-commands",
       ],
       expect.any(Object),
@@ -199,7 +199,7 @@ describe("spawnClaude", () => {
         "--print",
         "--model", "sonnet",
         "--dangerously-skip-permissions",
-        "--tools", "",
+        "--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
       ],
       expect.any(Object),
     );

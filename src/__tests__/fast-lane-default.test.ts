@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify from 'fastify'
@@ -16,6 +16,7 @@ vi.mock('../ledger/egress.js', () => ({
 }))
 
 import { spawnClaude } from '../claude/spawner.js'
+import { zonedDateString } from '../claude/daily-session.js'
 import { MessageProcessor } from '../bridge/processor.js'
 
 const ok = (output: string) => ({ output, stderr: '', exitCode: 0, durationMs: 5, timedOut: false })
@@ -49,7 +50,7 @@ function make() {
     deliver,
     Fastify({ logger: false }).log as never,
   )
-  return { processor, deliver, sent, edits, surface }
+  return { processor, deliver, sent, edits, surface, tmp }
 }
 
 describe('fast lane by default (2026-09-04)', () => {
@@ -95,6 +96,33 @@ describe('fast lane by default (2026-09-04)', () => {
     finish(ok('Station is on air, PlayoutONE healthy.'))
     await waitFor(() => deliver.mock.calls.some((c) => String(c[1]).includes('📬 Task #1 result')))
     expect(edits.at(-1)).toMatch(/✅ Task #1 done/)
+  })
+
+  it('a task never mints the daily session; a ghost daily session is rotated and the task retried fresh', async () => {
+    const { processor, deliver, tmp } = make()
+    const statePath = join(tmp, '.data', 'daily-session.json')
+    vi.mocked(spawnClaude).mockResolvedValue(ok('on air'))
+    processor.submit('c', 'check the station', 'u')
+    await waitFor(() => deliver.mock.calls.some((c) => String(c[1]).includes('📬 Task #1 result')))
+    expect(existsSync(statePath)).toBe(false)
+    expect(vi.mocked(spawnClaude).mock.calls[0][1]).toMatchObject({ resumeSession: false })
+
+    // Recorded on disk but gone from the CLI (2026-09-05 incident): the fork
+    // is refused with exit 0 + is_error, so the task rotates and runs fresh.
+    const ghost = '11111111-2222-4333-8444-555555555555'
+    mkdirSync(join(tmp, '.data'), { recursive: true })
+    writeFileSync(statePath, JSON.stringify({ date: zonedDateString(), sessionId: ghost }))
+    vi.mocked(spawnClaude)
+      .mockResolvedValueOnce({ ...ok(''), isError: true, errors: [`No conversation found with session ID: ${ghost}`] })
+      .mockResolvedValueOnce(ok('fresh run'))
+    processor.submit('c', 'check the station again', 'u')
+    await waitFor(() => deliver.mock.calls.some((c) => String(c[1]).includes('📬 Task #2 result')))
+    const calls = vi.mocked(spawnClaude).mock.calls
+    expect(calls.at(-2)?.[1]).toMatchObject({ sessionId: ghost, resumeSession: true, forkSession: true })
+    const rotated = JSON.parse(readFileSync(statePath, 'utf-8')) as { sessionId: string }
+    expect(rotated.sessionId).not.toBe(ghost)
+    expect(calls.at(-1)?.[1]).toMatchObject({ sessionId: rotated.sessionId, resumeSession: false })
+    expect(String(deliver.mock.calls.at(-1)?.[1])).toContain('fresh run')
   })
 
   it('a deliberation gets a fast answer with the dual-brain offer; "yes" then runs it as a job', async () => {

@@ -54,13 +54,15 @@ export class PromptBuilder {
       sessionMode?: 'fresh' | 'resumed'
       /** Date string for the daily brief header (defaults to today, NY time). */
       briefDate?: string
+      /** Spawned with the tool surface off (fast lane) — the context must not promise a shell. */
+      toolsOff?: boolean
     } = {},
   ): Promise<string> {
     const parts: string[] = []
     const resumed = options.sessionMode === 'resumed'
 
     if (!resumed) {
-      parts.push(this.getSystemContext())
+      parts.push(this.getSystemContext(options.toolsOff === true))
 
       // Conscience: the Φ-selected, chain-attested working memory — always in
       // the prompt, single- and dual-brain alike (both build through here).
@@ -114,9 +116,20 @@ export class PromptBuilder {
     return parts.join('\n\n')
   }
 
-  private getSystemContext(): string {
-    return `## Context
-You are ${this.nodeName}, responding to Tripp via Telegram (@${this.botUsername}).
+  private getSystemContext(toolsOff = false): string {
+    const head = `## Context
+You are ${this.nodeName}, responding to Tripp via Telegram (@${this.botUsername}).`
+    if (toolsOff) {
+      return `${head}
+This is the quick-reply lane: no shell, SSH, file, or network tools are attached this
+turn — ignore any connector tools (Calendar, Drive) you may see; they are not the
+Jarvis network. Answer from context in 1-3 short paragraphs. If the request needs
+commands run, logs read, or anything executed, say so in one line and tell Tripp to
+phrase it as an action ("check ...", "run ...", "queue it") — that spawns a
+background task with the full tool set. Do not describe yourself as broken or
+crippled; this lane is tool-less by design.`
+    }
+    return `${head}
 Match depth to the ask. Quick or conversational messages get 1-3 short paragraphs.
 Analysis, debugging, and introspection questions deserve real work: investigate with
 your tools first — read the files, check the logs, run the commands — and take the

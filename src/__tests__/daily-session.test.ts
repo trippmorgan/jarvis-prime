@@ -40,6 +40,18 @@ describe('DailySession', () => {
     expect(morning.sessionId).not.toBe(evening.sessionId)
   })
 
+  it('peek() reads today\'s session without minting one', () => {
+    const sessions = new DailySession(statePath())
+    const now = new Date('2026-07-18T16:00:00Z')
+    expect(sessions.peek(now)).toBeNull()
+    // Still nothing minted — the next real turn is the first of the day.
+    const first = sessions.forTurn(now)
+    expect(first.isNew).toBe(true)
+    expect(sessions.peek(now)).toEqual({ sessionId: first.sessionId, isNew: false })
+    // Yesterday's session is not today's.
+    expect(sessions.peek(new Date('2026-07-19T16:00:00Z'))).toBeNull()
+  })
+
   it('rotate() replaces the stored session for the same day', () => {
     const sessions = new DailySession(statePath())
     const now = new Date('2026-07-18T16:00:00Z')

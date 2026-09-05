@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import type { SpawnOptions, SpawnResult, SpawnUsage } from './types.js'
+import { EMPTY_MCP_CONFIG, type SpawnOptions, type SpawnResult, type SpawnUsage } from './types.js'
 import type { StreamEvent } from './stream-formatter.js'
 
 const DEFAULTS = {
@@ -49,7 +49,10 @@ export async function spawnClaudeStream(
     args.push(opts.resumeSession ? '--resume' : '--session-id', opts.sessionId)
     if (opts.resumeSession && opts.forkSession) args.push('--fork-session')
   }
-  if (!enableTools) args.push('--tools', '')
+  // --tools '' drops built-ins but claude.ai connector MCP servers (Drive,
+  // Calendar) still attach; strict-mcp with an empty config makes the lane
+  // genuinely tool-less so the model doesn't see a stray partial toolset.
+  if (!enableTools) args.push('--tools', '', '--strict-mcp-config', '--mcp-config', EMPTY_MCP_CONFIG)
   if (!enableSlashCommands) args.push('--disable-slash-commands')
 
   const start = performance.now()
@@ -64,6 +67,8 @@ export async function spawnClaudeStream(
     let usage: SpawnUsage | undefined
     let costUsd: number | undefined
     let modelResolved: string | undefined
+    let isError: boolean | undefined
+    let errors: string[] | undefined
     const textBlocks: string[] = []
     const stderrChunks: Buffer[] = []
 
@@ -107,6 +112,14 @@ export async function spawnClaudeStream(
         if (evt.type === 'result') {
           if (typeof evt.result === 'string') {
             resultText = evt.result
+          }
+          // A refused --resume (evicted/missing session) or an API-side
+          // failure arrives here as is_error:true with exit code 0 — the
+          // exit code alone cannot tell a failed turn from an empty one.
+          const errEvt = evt as unknown as { is_error?: boolean; errors?: unknown }
+          if (errEvt.is_error === true) isError = true
+          if (Array.isArray(errEvt.errors)) {
+            errors = errEvt.errors.filter((e): e is string => typeof e === 'string')
           }
           // Token usage + cost arrive on the final result event. Both are
           // optional — older CLI versions or aborted runs may omit them.
@@ -159,9 +172,11 @@ export async function spawnClaudeStream(
       opts.signal?.removeEventListener('abort', onAbort)
       const durationMs = Math.round(performance.now() - start)
       const output = resultText || textBlocks.join('\n')
+      let stderr = Buffer.concat(stderrChunks).toString('utf-8')
+      if (stderr.trim().length === 0 && errors && errors.length > 0) stderr = errors.join('\n')
       resolve({
         output,
-        stderr: Buffer.concat(stderrChunks).toString('utf-8'),
+        stderr,
         exitCode: code ?? 1,
         durationMs,
         timedOut,
@@ -169,6 +184,8 @@ export async function spawnClaudeStream(
         usage,
         costUsd,
         modelResolved,
+        isError,
+        errors,
       })
     })
 

@@ -54,6 +54,20 @@ export class DailySession {
   }
 
   /**
+   * Today's session if one has already been minted, else null — never mints.
+   * Background jobs use this: a job forks the daily session when it exists
+   * but must not claim the day's id for a session it will never create.
+   */
+  peek(now: Date = new Date()): SessionForTurn | null {
+    const today = zonedDateString(now, this.timeZone)
+    const state = this.read()
+    if (state && state.date === today && isUuid(state.sessionId)) {
+      return { sessionId: state.sessionId, isNew: false }
+    }
+    return null
+  }
+
+  /**
    * Replace today's session after a failed --resume. The caller retries the
    * turn once with the returned id as a fresh session.
    */

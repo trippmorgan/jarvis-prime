@@ -24,6 +24,7 @@ export interface JobRunResult {
   aborted?: boolean
   exitCode?: number
   stderr?: string
+  isError?: boolean
 }
 
 export interface JobSpec {
@@ -204,9 +205,14 @@ export class JobManager {
         },
       })
       if (job.status === 'running') {
-        job.status = result.aborted ? 'stopped' : result.timedOut ? 'timeout' : result.output.trim().length === 0 && (result.exitCode ?? 0) !== 0 ? 'failed' : 'done'
+        const silentFailure = result.output.trim().length === 0 && ((result.exitCode ?? 0) !== 0 || result.isError === true)
+        job.status = result.aborted ? 'stopped' : result.timedOut ? 'timeout' : silentFailure ? 'failed' : 'done'
       }
       job.output = result.output.trim()
+      if (job.status === 'failed' && job.output.length === 0) {
+        const detail = (result.stderr ?? '').trim().split('\n').find((l) => l.trim().length > 0)
+        if (detail) job.output = `Task failed: ${detail.slice(0, 300)}`
+      }
     } catch (err) {
       if (job.status === 'running') job.status = 'failed'
       job.output = `Task failed: ${err instanceof Error ? err.message : String(err)}`

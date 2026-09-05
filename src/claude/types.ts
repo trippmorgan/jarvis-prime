@@ -1,3 +1,6 @@
+/** --mcp-config value that, with --strict-mcp-config, detaches every MCP server (claude.ai connectors included). */
+export const EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
+
 export interface SpawnOptions {
   /** Path to the claude CLI binary */
   claudePath?: string;
@@ -59,4 +62,8 @@ export interface SpawnResult {
   costUsd?: number;
   /** Canonical model name resolved by the CLI (e.g. "claude-sonnet-4-6"). */
   modelResolved?: string;
+  /** The CLI's final `result` event carried is_error:true (the process may still exit 0). */
+  isError?: boolean;
+  /** Error strings from the CLI's final `result` event, when present. */
+  errors?: string[];
 }
