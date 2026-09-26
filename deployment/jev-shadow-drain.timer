@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry pending shadow judgments every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=15
+Unit=jev-shadow-drain.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Retry pending advisory Jev shadow cases on CPU
+After=jev-shadow-cpu.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/joevoldemort/.openclaw/workspace/jarvis-prime
+Environment=FRANK_JEV_URL=http://127.0.0.1:30110
+ExecStart=/home/joevoldemort/.nvm/versions/node/v22.22.1/bin/node dist/cli/shadow-worker.js
+TimeoutStartSec=13min
+UMask=0077
+Nice=10

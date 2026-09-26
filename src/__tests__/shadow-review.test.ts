@@ -75,7 +75,8 @@ describe('advisory shadow collection', () => {
     try {
       expect(collectShadow(cfg, input, () => {}, d)).toBeUndefined()
       collectShadow(cfg, { ...input, messageId: 'second' }, () => {}, d)
-      expect(f).toHaveBeenCalledTimes(1); expect(shadowStatus(d).cases).toBe(2)
+      await vi.waitFor(() => expect(f).toHaveBeenCalledTimes(1))
+      expect(shadowStatus(d).cases).toBe(2)
       reject(new Error('timeout')); await new Promise(r => setTimeout(r, 0))
       expect(shadowStatus(d).predictions).toBe(0)
     } finally { vi.unstubAllGlobals() }
