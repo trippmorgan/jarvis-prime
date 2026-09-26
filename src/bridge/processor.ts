@@ -1,11 +1,14 @@
 import type { FastifyBaseLogger } from 'fastify'
 import { join } from 'node:path'
-import { spawnClaude } from '../claude/spawner.js'
 import { spawnClaudeStream } from '../claude/spawner-stream.js'
+import { spawnOpenclawAgentStream } from '../openclaw/spawner-stream.js'
 import { formatStreamEvent, type StreamEvent } from '../claude/stream-formatter.js'
+import type { LeftRuntime } from './mode-state.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
+import { RaceGate, askHarness, attestRound, sha256, type HarnessRaceConfig, REVIEW_SYSTEM, buildReviewPrompt, parseReview, formatCrossReview, shouldDeliverReview, askJevJudge, isJevVerdict, type ToolEvidence, type Review, type ReviewRecord } from './harness-race.js'
+import { fetchConscience, formatConscienceDigest, citeConscience } from './conscience.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
 import {
   classifyMessage,
@@ -50,6 +53,30 @@ const HARD_TIMEOUT_MS = 600_000
 const TELEGRAM_MAX_LENGTH = 4096
 const HISTORY_RELATIVE_PATH = '.data/conversation-history.jsonl'
 
+/**
+ * Frank/Voldemort 2026-05-01 — non-substantive assistant outputs that should
+ * NOT be persisted to conversation history.
+ *
+ * Why: openclaw's `agent --json` envelope occasionally returns a payload that
+ * is *only* a delivery/error warning — no model text. spawnOpenclawAgent's
+ * extractAnswer() falls back to surfacing that warning text rather than
+ * silence (so the user sees what failed). But if we then write the warning
+ * into history.jsonl as the assistant turn, the next turn the model reads
+ * its own failure echo as prior assistant content and degrades further —
+ * three "Update" turns in a row produced the identical canned warning
+ * because qwen3 was looking at three identical canned warnings in its
+ * history. Drop those turns from history; the user still sees them on
+ * Telegram, but the model wakes fresh next turn.
+ */
+function isNonSubstantiveOutput(text: string): boolean {
+  const t = text.trim()
+  if (t.length === 0) return true
+  if (t === '(No output)') return true
+  if (t.startsWith('⚠️')) return true
+  if (t.startsWith('✉️')) return true
+  return false
+}
+
 export interface DeliverFn {
   (chatId: string, text: string): Promise<void>
 }
@@ -72,19 +99,29 @@ export type OrchestratorFn = (input: {
   onEvent?: (eventName: string, payload?: CallosumEventPayload) => void
 }) => Promise<BrainResult>
 
+export type DeepCommand =
+  | 'toggle'
+  | 'status'
+  | 'left:openclaw'
+  | 'left:claude'
+
 /**
  * Match the /deep slash command. Returns:
- *   - 'toggle' when the message is exactly `/deep` (case-insensitive)
- *   - 'status' when the message is `/deep status` (case-insensitive)
+ *   - 'toggle' when the message is exactly `/deep` (toggles single↔dual brain)
+ *   - 'status' when the message is `/deep status` (reports both mode + runtime)
+ *   - 'left:openclaw' when `/deep openclaw` (swap left brain to local qwen via openclaw CLI)
+ *   - 'left:claude' when `/deep claude` (swap left brain to Anthropic Claude CLI)
  *   - null otherwise — message proceeds through normal classification
  *
- * Trailing whitespace is tolerated. Anything else after `/deep` (other than
- * `status`) is intentionally not matched — keeps the surface tiny.
+ * Trailing whitespace + case are tolerated. Anything else after `/deep` is
+ * intentionally not matched — keeps the surface tiny.
  */
-export function matchDeepCommand(text: string): 'toggle' | 'status' | null {
+export function matchDeepCommand(text: string): DeepCommand | null {
   const trimmed = text.trim().toLowerCase()
   if (trimmed === '/deep') return 'toggle'
   if (trimmed === '/deep status') return 'status'
+  if (trimmed === '/deep openclaw') return 'left:openclaw'
+  if (trimmed === '/deep claude') return 'left:claude'
   return null
 }
 
@@ -177,10 +214,27 @@ export interface ProcessorConfig {
    * 'dual' to exercise the orchestrator path.
    */
   defaultMode?: Mode
+  /**
+   * Initial left-brain runtime. Frank/Voldemort defaults to 'openclaw' so
+   * the local qwen3:30b-a3b model fronts the brain with full tool surface
+   * (per the all-local SPEC mandate). Set USE_CLAUDE_LEFT=true to default
+   * to 'claude' — handy for ad-hoc Anthropic experiments. /deep claude and
+   * /deep openclaw flip at runtime without restart.
+   */
+  defaultLeftRuntime?: LeftRuntime
+  /**
+   * 2026-09-16 — harness race ("two Franks, one receiver"). When set, every
+   * natural message is also sent to the Gibson harness in parallel; both
+   * answers are delivered (first wins "first"), both are appended to history,
+   * and the round is chained on the jarvis ledger. See bridge/harness-race.ts.
+   */
+  harnessRace?: HarnessRaceConfig
 }
 
 export class MessageProcessor {
   private readonly queue: MessageQueue
+  /** 2026-09-22: per-message LEFT tool evidence (commands + result snippets) for the cross-review. */
+  private readonly leftEvidence = new Map<string, ToolEvidence[]>()
   private readonly deliver: DeliverFn
   private readonly config: ProcessorConfig
   private readonly log: FastifyBaseLogger
@@ -192,6 +246,15 @@ export class MessageProcessor {
   private readonly reporter: Reporter
   private readonly liveTraces: Map<string, TraceHandle> = new Map()
   private readonly modeState: ModeState
+  /**
+   * TUI bridge (2026-09-01) — callers that need the reply synchronously
+   * (routes/chat-completions.ts) register a waiter keyed by queue message id;
+   * the queue's complete/error events settle it. Telegram never uses this.
+   */
+  private readonly waiters: Map<
+    string,
+    { resolve: (result: string) => void; reject: (err: Error) => void }
+  > = new Map()
 
   constructor(config: ProcessorConfig, deliver: DeliverFn, log: FastifyBaseLogger) {
     this.config = config
@@ -205,7 +268,10 @@ export class MessageProcessor {
       botUsername: config.botUsername,
     })
     this.queue = new MessageQueue((msg) => this.process(msg))
-    this.modeState = new ModeState(config.defaultMode ?? 'single')
+    this.modeState = new ModeState(
+      config.defaultMode ?? 'single',
+      config.defaultLeftRuntime ?? 'openclaw',
+    )
 
     // Build orchestrator (if dual-brain enabled). Respects injected override for tests.
     if (config.orchestrator) {
@@ -216,6 +282,10 @@ export class MessageProcessor {
         model: config.claudeModel,
         workingDir: config.workingDir,
         logger: this.log,
+        // Pick the spawner per-call from current mode state so /deep claude
+        // and /deep openclaw take effect mid-session without rebuilding the
+        // hemisphere client.
+        runtimeResolver: () => this.modeState.currentLeftRuntime,
       })
       const timeoutMs = config.corpusCallosumTimeoutMs
       const routerEnabled = config.routerEnabled === true
@@ -286,22 +356,39 @@ export class MessageProcessor {
       if (event.type === 'error') {
         this.log.error({ messageId: event.message.id, error: event.error }, 'Queue processing error')
       }
+      if (event.type === 'processing') return
+      const waiter = this.waiters.get(event.message.id)
+      if (!waiter) return
+      this.waiters.delete(event.message.id)
+      if (event.type === 'complete') waiter.resolve(event.result)
+      else waiter.reject(new Error(event.error))
     })
   }
 
-  submit(chatId: string, text: string, userId: string): { messageId: string; position: number } {
+  submit(
+    chatId: string,
+    text: string,
+    userId: string,
+    extraContext?: string,
+  ): { messageId: string; position: number } {
     this.log.info(
       {
         event: 'message_inbound',
         chatId,
         userId,
         textLength: text.length,
+        hasExtraContext: !!extraContext,
         timestamp: Date.now(),
       },
       'message inbound',
     )
 
-    const receipt = this.queue.enqueue({ chatId, text, userId })
+    const receipt = this.queue.enqueue({
+      chatId,
+      text,
+      userId,
+      ...(extraContext ? { extraContext } : {}),
+    })
 
     this.log.info(
       {
@@ -318,6 +405,32 @@ export class MessageProcessor {
     }
 
     return { messageId: receipt.id, position: receipt.position }
+  }
+
+  /**
+   * Submit a message and resolve with the final reply text once the queue has
+   * processed it — the same dual-brain path Telegram takes, minus delivery.
+   * Used by the OpenAI-compatible bridge that fronts the openclaw TUI. Rejects
+   * only if the queue itself throws; pipeline errors come back as the
+   * user-facing error string, exactly as Telegram would receive them.
+   */
+  submitAndWait(
+    chatId: string,
+    text: string,
+    userId: string,
+    extraContext?: string,
+  ): Promise<{ messageId: string; position: number; result: string }> {
+    return new Promise((resolve, reject) => {
+      // submit() is synchronous and MessageQueue.drain() awaits the processor
+      // before emitting complete/error, so the waiter is always registered
+      // before the event can fire.
+      const receipt = this.submit(chatId, text, userId, extraContext)
+      this.waiters.set(receipt.messageId, {
+        resolve: (result: string) =>
+          resolve({ messageId: receipt.messageId, position: receipt.position, result }),
+        reject,
+      })
+    })
   }
 
   getQueueLength(): number {
@@ -405,10 +518,18 @@ export class MessageProcessor {
     // W8.7.1 — Short-message fast lane. Pure-shape heuristic that runs BEFORE
     // tier-0 (saves the embedding round-trip when shape alone is decisive).
     // Short, non-question, non-slash natural messages route to single-brain.
+    //
+    // Frank/Voldemort 2026-05-01: yields when the user has explicitly opted
+    // into /deep dual mode. The fast lane is a latency optimization for the
+    // *default* single-brain path; once the user toggles dual, every natural
+    // turn — short or long — should hit the corpus-callosum orchestrator.
+    // Otherwise terse instructions ("Update", "Download X") silently bypass
+    // the dual-brain the user just asked for.
     const shortFastLane =
       classification.kind === 'natural' &&
       this.config.corpusCallosumEnabled &&
       this.config.shortMessageFastLaneEnabled !== false &&
+      this.modeState.current !== 'dual' &&
       isShortMessageFastLane(msg.text, {
         maxChars: this.config.shortMessageMaxChars,
       })
@@ -470,7 +591,7 @@ export class MessageProcessor {
       )
     }
 
-    const tier0Shortcut = tier0?.route === 'quick_q'
+    const tier0Shortcut = tier0?.route === 'quick_q' && this.modeState.current !== 'dual'
 
     // 2026-04-23 — Dual-brain is now opt-in via /deep. Default flow is
     // single-brain Claude with tools-on. Set the mode to 'dual' via /deep
@@ -497,9 +618,14 @@ export class MessageProcessor {
       },
     })
 
+    // Harness race: fan out to the second brain before the primary path runs.
+    const race = classification.kind === 'natural' ? this.startHarnessRace(msg) : null
+
     if (useDualBrain) {
       this.log.info({ event: 'route_dual_brain', messageId: msg.id }, 'routing via dual-brain')
-      return this.processDualBrain(msg, processStart)
+      const reply = await this.processDualBrain(msg, processStart)
+      this.finishHarnessRace(race, reply, processStart, 'dual_brain')
+      return reply
     }
 
     // Resolve single-brain kind: short-msg fast lane wins over tier-0 wins
@@ -523,7 +649,141 @@ export class MessageProcessor {
       },
       'routing via single-brain bypass',
     )
-    return this.processSingleBrain(msg, processStart, singleBrainKind)
+    const reply = await this.processSingleBrain(msg, processStart, singleBrainKind)
+    this.finishHarnessRace(race, reply, processStart, 'single_brain')
+    return reply
+  }
+
+  // ── Harness race ("two Franks, one receiver") ──────────────────────────────
+
+  /**
+   * Kick off the harness answer in parallel with the primary path. The harness
+   * gets the same recent history (minus the just-appended user turn, which is
+   * passed as the question). Delivery, history append and chaining happen when
+   * it resolves; nothing here blocks the primary path.
+   */
+  private startHarnessRace(msg: QueueMessage): RaceGate | null {
+    const cfg = this.config.harnessRace
+    if (!cfg) return null
+    const gate = new RaceGate(msg.id, msg.chatId, msg.text)
+    // Shared history minus the just-appended user turn, and minus the harness's OWN prior views —
+    // seeing them made it comment on the earlier disagreement instead of answering (round 3, 2026-09-16).
+    const prior = this.history.getRecent(14)
+      .filter((h) => !(h.role === 'user' && h.content === msg.text))
+      .filter((h) => !(h.role === 'assistant' && h.content.startsWith('[harness view')))
+      .slice(-10)
+    const startedAt = Date.now()
+    this.log.info({ event: 'harness_race_start', messageId: msg.id, model: cfg.model, historyEntries: prior.length }, 'harness race start')
+    askHarness(cfg, msg.text, prior).then(
+      async (answer) => {
+        const wasFirst = gate.claimFirst('harness')
+        gate.record.harness = { hash: sha256(answer.text), chars: answer.text.length, ms: answer.ms, mode: answer.mode }
+        this.log.info({ event: 'harness_race_answer', messageId: msg.id, mode: answer.mode, durationMs: answer.ms, chars: answer.text.length, first: wasFirst }, 'harness race answer')
+        const labeled = RaceGate.labelHarness(answer, wasFirst)
+        for (const chunk of splitMessage(labeled)) {
+          await this.deliver(msg.chatId, chunk).catch(() => {})
+        }
+        this.history.append('assistant', `[harness view · ${answer.mode}] ${answer.text}`)
+        gate.harnessText = answer.text
+        gate.harnessMemory = answer.memory ?? null
+        gate.harnessEvidence = answer.evidence ?? []
+        void this.maybeCrossReview(gate)
+        void attestRound(cfg, 'frank-harness-answer', gate.record, 'ok').then((st) => this.log.info({ event: 'harness_race_attested', messageId: msg.id, process: 'frank-harness-answer', status: st }, 'ledger attest'))
+      },
+      (err: unknown) => {
+        const ms = Date.now() - startedAt
+        const error = err instanceof Error ? err.message : String(err)
+        gate.record.harness = { error, ms }
+        this.log.warn({ event: 'harness_race_error', messageId: msg.id, durationMs: ms, error }, 'harness race error')
+        void attestRound(cfg, 'frank-harness-answer', gate.record, 'failed')
+      },
+    )
+    return gate
+  }
+
+  /**
+   * Cross-review: once BOTH answers exist, each brain reviews the other's
+   * answer (harness via its chat lane; dual-brain via the RIGHT hemisphere
+   * client, which is fast and already bound to the persona-free reviewer
+   * role). One compact verdict message is delivered; the full reviews go to
+   * the evidence dir and their hash to the chain (PROCESS_RUN frank-cross-review).
+   * Disabled with FRANK_CROSS_REVIEW=0. Fail-soft.
+   */
+  private async maybeCrossReview(gate: RaceGate): Promise<void> {
+    const cfg = this.config.harnessRace
+    if (!cfg || gate.reviewStarted || gate.jarvisText === null || gate.harnessText === null) return
+    if (/^(0|false|off|no)$/i.test(process.env.FRANK_CROSS_REVIEW ?? '')) return
+    gate.reviewStarted = true
+    const { messageId, chatId } = gate.record
+    const question = gate.inboundText, jarvis = gate.jarvisText, harness = gate.harnessText
+    this.log.info({ event: 'cross_review_start', messageId }, 'cross-review start')
+    const t0 = Date.now()
+    // Each reviewer is told what context the harness answer was given (network-memory atoms), so
+    // facts drawn from memory are judged as observed rather than "confabulated" (10:10 round, 2026-09-17).
+    const harnessMem = gate.harnessMemory ?? undefined
+    // Execution evidence for both sides (2026-09-22). The dual-brain map is filled by the LEFT stream.
+    const harnessEv = gate.harnessEvidence ?? []
+    const jarvisEv = this.leftEvidence.get(messageId) ?? []
+    this.leftEvidence.delete(messageId)
+    // The network's chain-attested conscience (lifecoin README §9) — both reviewers judge against the
+    // same STANDING PRINCIPLES Prime uses, and the record cites the snapshot hash in force. Fail-soft.
+    const conscience = await fetchConscience({ kernelUrl: cfg.ledgerKernelUrl, token: cfg.kernelToken })
+    const digest = conscience ? formatConscienceDigest(conscience) : undefined
+    this.log.info({ event: 'conscience_loaded', messageId, snapshotHash: conscience?.snapshotHash ?? null, attested: conscience?.attested ?? null, principles: conscience?.normative.length ?? 0, findings: conscience?.reflective.length ?? 0 }, 'conscience')
+    const harnessSide = askHarness({ ...cfg, model: 'frank-chat' }, `${REVIEW_SYSTEM}\n\n${buildReviewPrompt(question, harness, jarvis, { mine: harnessMem, conscience: digest, mineEvidence: harnessEv, otherEvidence: jarvisEv })}`, [])
+      .then((a) => parseReview('harness', a.text, a.ms))
+      .catch((e: unknown) => ({ reviewer: 'harness', verdict: 'unparsed', agree: false, issues: [], unverified: [], omissions: [], conscience: 'ok', principles: [], note: `review failed: ${e instanceof Error ? e.message : String(e)}`, ms: Date.now() - t0 } as Review))
+    const right = new RightHemisphereClient({ gatewayUrl: this.config.gatewayUrl, gatewayToken: this.config.gatewayToken, model: this.config.rightModel, logger: this.log, reasoningEffort: process.env.FRANK_RIGHT_REASONING })
+    const dualSide = right.call({ system: REVIEW_SYSTEM, user: buildReviewPrompt(question, jarvis, harness, { other: harnessMem, conscience: digest, mineEvidence: jarvisEv, otherEvidence: harnessEv }), timeoutMs: 180_000 })
+      .then((r) => parseReview('dual-brain', r.content, r.durationMs))
+      .catch((e: unknown) => ({ reviewer: 'dual-brain', verdict: 'unparsed', agree: false, issues: [], unverified: [], omissions: [], conscience: 'ok', principles: [], note: `review failed: ${e instanceof Error ? e.message : String(e)}`, ms: Date.now() - t0 } as Review))
+    // Hook 1 (2026-09-26): the Jev-Omni typed verdict runs alongside the two narrative reviewers.
+    // Deterministic, position-balanced, hashed by the service; rides inside this record on-chain. Fail-soft.
+    const jevSide = askJevJudge(cfg, question, harness, jarvis)
+    const [reviews, jev] = await Promise.all([Promise.all([harnessSide, dualSide]), jevSide])
+    this.log.info(isJevVerdict(jev)
+      ? { event: 'jev_verdict', messageId, pHarness: jev.pHarness, verdict: jev.verdict, strong: jev.strong, positionBias: jev.positionBias, head: jev.head, durationMs: jev.ms }
+      : { event: 'jev_verdict', messageId, error: jev.error, durationMs: jev.ms }, 'jev typed verdict')
+    const record: ReviewRecord = { messageId, inboundHash: gate.record.inboundHash, jarvisHash: sha256(jarvis), harnessHash: sha256(harness), reviews, startedAt: new Date(t0).toISOString(), conscience: citeConscience(conscience), jev, evidence: { harness: harnessEv, jarvis: jarvisEv } }
+    const summary = formatCrossReview(reviews, jev)
+    this.log.info({ event: 'cross_review_done', messageId, durationMs: Date.now() - t0, verdicts: reviews.map((r) => `${r.reviewer}:${r.verdict}`), concern: reviews.some((r) => r.conscience === 'concern') }, 'cross-review done')
+    // 2026-09-17 (Tripp: three messages per turn is a lot). FRANK_CROSS_REVIEW_DELIVERY =
+    //   flagged (default) → deliver only when the brains disagree, find issues, or raise a concern
+    //   always            → every round (previous behaviour)
+    //   never             → chain only, never message
+    const delivery = shouldDeliverReview(reviews, undefined, jev)
+    if (delivery.deliver) {
+      for (const chunk of splitMessage(summary)) await this.deliver(chatId, chunk).catch(() => {})
+    }
+    this.log.info({ event: 'cross_review_delivery', messageId, delivered: delivery.deliver, reason: delivery.reason }, 'cross-review delivery')
+    // The review is evidence, not conversation: it is delivered and chained but NOT appended to history.
+    const canon = JSON.stringify(record)   // attestRound writes it to the evidence dir and chains its sha256
+    const status = await attestRound(cfg, 'frank-cross-review', { ...gate.record, startedAt: record.startedAt }, reviews.some((r) => r.verdict === 'unparsed') ? 'partial' : 'ok', canon).catch(() => 0)
+    this.log.info({ event: 'harness_race_attested', messageId, process: 'frank-cross-review', status, artifactBytes: Buffer.byteLength(canon) }, 'ledger attest')
+    // Countable conscience signal for the ledger observer: one PROCESS_RUN `frank-conscience-check` per
+    // round, outcome ok = both reviewers clean, failed = a concern was raised (the review record is the
+    // artifact, so the concern text, principle slugs and snapshot hash are behind artifact_hash).
+    const concern = reviews.some((r) => r.conscience === 'concern')
+    const ccStatus = await attestRound(cfg, 'frank-conscience-check', { ...gate.record, startedAt: record.startedAt }, concern ? 'failed' : 'ok', canon).catch(() => 0)
+    this.log.info({ event: 'harness_race_attested', messageId, process: 'frank-conscience-check', status: ccStatus, concern, principles: reviews.flatMap((r) => r.principles), snapshotHash: conscience?.snapshotHash ?? null }, 'ledger attest')
+    // Hook 1: fifth PROCESS_RUN `frank-typed-verdict` — ok = Jev judged the round, failed = service unavailable.
+    // The probabilities, verdict, position bias and the service's decision hashes are inside the artifact.
+    if (cfg.jevUrl) {
+      const tvStatus = await attestRound(cfg, 'frank-typed-verdict', { ...gate.record, startedAt: record.startedAt }, isJevVerdict(jev) ? 'ok' : 'failed', canon).catch(() => 0)
+      this.log.info({ event: 'harness_race_attested', messageId, process: 'frank-typed-verdict', status: tvStatus, verdict: isJevVerdict(jev) ? jev.verdict : null, strong: isJevVerdict(jev) ? jev.strong : null }, 'ledger attest')
+    }
+  }
+
+  /** Record the primary path's result on the gate and chain the round. */
+  private finishHarnessRace(gate: RaceGate | null, reply: string, processStart: number, path: string): void {
+    if (!gate || !this.config.harnessRace) return
+    const wasFirst = gate.claimFirst('jarvis')
+    gate.record.jarvis = { hash: sha256(reply), chars: reply.length, ms: Date.now() - processStart, path }
+    gate.jarvisText = reply
+    void this.maybeCrossReview(gate)
+    this.log.info({ event: 'harness_race_jarvis_done', messageId: gate.record.messageId, path, first: wasFirst, durationMs: gate.record.jarvis.ms }, 'harness race: primary done')
+    const h = gate.record.harness
+    void attestRound(this.config.harnessRace, 'frank-telegram-round', gate.record, h && 'error' in h ? 'partial' : 'ok').then((st) => this.log.info({ event: 'harness_race_attested', messageId: gate.record.messageId, process: 'frank-telegram-round', status: st }, 'ledger attest'))
   }
 
   /**
@@ -532,30 +792,66 @@ export class MessageProcessor {
    * finalises the trace — does not append to history or spawn Claude.
    */
   private async handleDeepCommand(
-    action: 'toggle' | 'status',
+    action: DeepCommand,
     msg: QueueMessage,
     processStart: number,
   ): Promise<string> {
-    const previous = this.modeState.current
-    const mode = action === 'toggle' ? this.modeState.toggle() : previous
-    const reply =
+    const previousMode = this.modeState.current
+    const previousRuntime = this.modeState.currentLeftRuntime
+
+    let mode = previousMode
+    let runtime = previousRuntime
+    if (action === 'toggle') {
+      mode = this.modeState.toggle()
+    } else if (action === 'left:openclaw') {
+      runtime = this.modeState.setLeftRuntime('openclaw')
+    } else if (action === 'left:claude') {
+      runtime = this.modeState.setLeftRuntime('claude')
+    }
+
+    const leftModel = process.env.FRANK_LEFT_MODEL ?? 'qwen3:30b-a3b'
+    const leftLoc = /ollama\.com/.test(process.env.FRANK_LEFT_OLLAMA_URL ?? '') ? 'cloud' : 'local'
+    const runtimeLabel =
+      runtime === 'openclaw' ? `${leftModel} (openclaw, ${leftLoc})` : 'Claude Sonnet (Anthropic CLI)'
+    const rightLabel = `${this.config.rightModel} (cloud)`
+    const baseStatus =
       mode === 'dual'
-        ? action === 'status'
-          ? '🧠 Dual-brain ON — Claude + Codex collaborating. /deep to flip back.'
-          : '🧠 Dual-brain ON — Claude + Codex collaborating. /deep again to flip back.'
-        : action === 'status'
-          ? '⚡ Claude solo. /deep to engage dual-brain.'
-          : '⚡ Claude solo. /deep again to engage dual-brain.'
+        ? `🧠 Dual-brain ON — left=${runtimeLabel}, right=${rightLabel}.`
+        : `⚡ Single-brain — left=${runtimeLabel}.`
+
+    let reply: string
+    switch (action) {
+      case 'toggle':
+        reply =
+          mode === 'dual'
+            ? `${baseStatus} /deep again to flip back.`
+            : `${baseStatus} /deep to engage dual-brain.`
+        break
+      case 'status':
+        reply =
+          mode === 'dual'
+            ? `${baseStatus} /deep to flip back. /deep claude or /deep openclaw to swap left runtime.`
+            : `${baseStatus} /deep to engage dual-brain. /deep claude or /deep openclaw to swap left runtime.`
+        break
+      case 'left:openclaw':
+        reply = `🧠 Left runtime → openclaw (${leftModel} ${leftLoc}, full tools). ${baseStatus}`
+        break
+      case 'left:claude':
+        reply = `🧠 Left runtime → Claude CLI (Anthropic). ${baseStatus}`
+        break
+    }
 
     this.log.info(
       {
         event: 'deep_command',
         messageId: msg.id,
         action,
-        previousMode: previous,
+        previousMode,
+        previousRuntime,
         mode,
+        leftRuntime: runtime,
       },
-      `/deep ${action} → ${mode}`,
+      `/deep ${action} → mode=${mode} left=${runtime}`,
     )
 
     await this.deliver(msg.chatId, reply).catch(() => {})
@@ -597,6 +893,50 @@ export class MessageProcessor {
   }
 
   /**
+   * Run the active left-brain spawner (streaming). Picks between the openclaw
+   * CLI (qwen3:30b-a3b local with workspace tools, default) and the Anthropic
+   * Claude CLI (Sonnet, fallback) based on current ModeState.
+   *
+   * Both spawners share the SpawnResult contract so the surrounding pipeline
+   * (Langfuse generation, deliver, history) is runtime-agnostic.
+   */
+  private async runLeftStream(
+    prompt: string,
+    opts: {
+      timeoutMs: number
+      enableTools?: boolean
+      enableSlashCommands?: boolean
+      onEvent?: (event: StreamEvent) => void
+    },
+  ): Promise<{
+    output: string
+    stderr: string
+    exitCode: number
+    durationMs: number
+    timedOut: boolean
+  }> {
+    const runtime = this.modeState.currentLeftRuntime
+    if (runtime === 'openclaw') {
+      return spawnOpenclawAgentStream(prompt, {
+        workingDir: this.config.workingDir,
+        timeoutMs: opts.timeoutMs,
+        ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
+      })
+    }
+    return spawnClaudeStream(prompt, {
+      claudePath: this.config.claudePath,
+      model: this.config.claudeModel,
+      workingDir: this.config.workingDir,
+      timeoutMs: opts.timeoutMs,
+      ...(opts.enableTools !== undefined ? { enableTools: opts.enableTools } : {}),
+      ...(opts.enableSlashCommands !== undefined
+        ? { enableSlashCommands: opts.enableSlashCommands }
+        : {}),
+      ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
+    })
+  }
+
+  /**
    * W8.7.1 — for fast-lane paths (short-message heuristic + tier-0 quick_q),
    * spawn Claude without tools / slash-commands. Dropping the tool surface
    * keeps the CLI from booting a full agent session — 6-10s cold start
@@ -631,7 +971,7 @@ export class MessageProcessor {
     }, ACK_DELAY_MS)
 
     try {
-      const prompt = this.promptBuilder.build(msg.text)
+      const prompt = this.promptBuilder.build(msg.text, msg.extraContext)
       this.log.info(
         {
           event: 'prompt_built',
@@ -674,14 +1014,10 @@ export class MessageProcessor {
       let lastProgressPostedAt = 0
       let lastProgressPostedStatus: string | null = null
       const LEGACY_PROGRESS_INTERVAL_MS = 60_000
-      const result = await spawnClaudeStream(prompt, {
-        claudePath: this.config.claudePath,
-        model: this.config.claudeModel,
-        workingDir: this.config.workingDir,
+      const result = await this.runLeftStream(prompt, {
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
         // W8.7.1 — tools off on the chitchat fast lanes.
-        enableTools: fastLane ? false : undefined,
-        enableSlashCommands: fastLane ? false : undefined,
+        ...(fastLane ? { enableTools: false, enableSlashCommands: false } : {}),
         onEvent: (event) => {
           const status = formatStreamEvent(event, { redactClinicalPaths: isClinical })
           if (!status) return
@@ -755,15 +1091,26 @@ export class MessageProcessor {
       }
 
       const output = result.output.trim() || '(No output)'
-      this.history.append('assistant', output)
-      this.log.info(
-        {
-          event: 'history_assistant_appended',
-          messageId: msg.id,
-          assistantContentLength: output.length,
-        },
-        'history assistant appended',
-      )
+      if (isNonSubstantiveOutput(output)) {
+        this.log.warn(
+          {
+            event: 'history_assistant_skipped_warning',
+            messageId: msg.id,
+            assistantContentLength: output.length,
+          },
+          'skipped history append — non-substantive output (warning/empty)',
+        )
+      } else {
+        this.history.append('assistant', output)
+        this.log.info(
+          {
+            event: 'history_assistant_appended',
+            messageId: msg.id,
+            assistantContentLength: output.length,
+          },
+          'history assistant appended',
+        )
+      }
       await this.deliverWithLogging(msg.id, msg.chatId, output, 'success')
 
       this.log.info({
@@ -796,7 +1143,7 @@ export class MessageProcessor {
     const stopTyping = responder.startTyping(msg.chatId)
 
     try {
-      const prompt = this.promptBuilder.build(msg.text)
+      const prompt = this.promptBuilder.build(msg.text, msg.extraContext)
       this.log.info(
         {
           event: 'prompt_built',
@@ -836,13 +1183,9 @@ export class MessageProcessor {
       // Each tool_use event maps to a status line via formatStreamEvent;
       // updatePhase is debounced inside the responder so Telegram's edit
       // limit isn't an issue.
-      const result = await spawnClaudeStream(prompt, {
-        claudePath: this.config.claudePath,
-        model: this.config.claudeModel,
-        workingDir: this.config.workingDir,
+      const result = await this.runLeftStream(prompt, {
         timeoutMs: Math.min(this.config.claudeTimeoutMs, HARD_TIMEOUT_MS),
-        enableTools: fastLane ? false : undefined,
-        enableSlashCommands: fastLane ? false : undefined,
+        ...(fastLane ? { enableTools: false, enableSlashCommands: false } : {}),
         onEvent: (event) => {
           const status = formatStreamEvent(event, {
             redactClinicalPaths: isClinical,
@@ -904,15 +1247,26 @@ export class MessageProcessor {
       }
 
       const output = result.output.trim() || '(No output)'
-      this.history.append('assistant', output)
-      this.log.info(
-        {
-          event: 'history_assistant_appended',
-          messageId: msg.id,
-          assistantContentLength: output.length,
-        },
-        'history assistant appended',
-      )
+      if (isNonSubstantiveOutput(output)) {
+        this.log.warn(
+          {
+            event: 'history_assistant_skipped_warning',
+            messageId: msg.id,
+            assistantContentLength: output.length,
+          },
+          'skipped history append — non-substantive output (warning/empty)',
+        )
+      } else {
+        this.history.append('assistant', output)
+        this.log.info(
+          {
+            event: 'history_assistant_appended',
+            messageId: msg.id,
+            assistantContentLength: output.length,
+          },
+          'history assistant appended',
+        )
+      }
       await responder.finalize(msg.chatId, ackMessageId, output)
 
       this.log.info({
@@ -1091,7 +1445,7 @@ export class MessageProcessor {
       // also formats history/userMsg in its own affordance/integration builders.
       // v1 accepts this redundancy — stripping it would require surgery inside
       // PromptBuilder which lives on the single-brain path.
-      const basePrompt = this.promptBuilder.build(msg.text)
+      const basePrompt = this.promptBuilder.build(msg.text, msg.extraContext)
       const history = this.history.getRecent(10)
 
       this.log.info(
@@ -1131,15 +1485,26 @@ export class MessageProcessor {
       )
 
       const output = result.finalText.trim() || '(No output)'
-      this.history.append('assistant', result.finalText)
-      this.log.info(
-        {
-          event: 'history_assistant_appended',
-          messageId: msg.id,
-          assistantContentLength: result.finalText.length,
-        },
-        'history assistant appended',
-      )
+      if (isNonSubstantiveOutput(output)) {
+        this.log.warn(
+          {
+            event: 'history_assistant_skipped_warning',
+            messageId: msg.id,
+            assistantContentLength: result.finalText.length,
+          },
+          'skipped history append — non-substantive dual-brain output',
+        )
+      } else {
+        this.history.append('assistant', result.finalText)
+        this.log.info(
+          {
+            event: 'history_assistant_appended',
+            messageId: msg.id,
+            assistantContentLength: result.finalText.length,
+          },
+          'history assistant appended',
+        )
+      }
       await this.deliverWithLogging(msg.id, msg.chatId, output, 'success')
 
       this.log.info(
@@ -1184,7 +1549,7 @@ export class MessageProcessor {
     let cardPosted = false
 
     try {
-      const basePrompt = this.promptBuilder.build(msg.text)
+      const basePrompt = this.promptBuilder.build(msg.text, msg.extraContext)
       const history = this.history.getRecent(10)
 
       this.log.info(
@@ -1216,6 +1581,19 @@ export class MessageProcessor {
         // events: the deliberation card has already been pinned by the time
         // integration runs, so further bubble edits would clobber it.
         if (eventName === 'hemisphere_tool_use' && payload?.streamEvent) {
+          // Evidence first (before any UX early-return): record tool_use inputs and tool_result snippets.
+          try {
+            const se = payload.streamEvent as { type?: string; message?: { content?: Array<Record<string, unknown>> } }
+            for (const b of se.message?.content ?? []) {
+              if (se.type === 'user' && b.type === 'tool_result') {
+                const list = this.leftEvidence.get(msg.id) ?? []
+                const inp = b.input as Record<string, unknown> | undefined
+                list.push({ tool: String(b.name ?? '?'), input: String(inp?.command ?? inp?.query ?? '').slice(0, 200), result: String(b.text ?? b.content ?? '').slice(0, 240) })
+                if (list.length > 40) list.shift()
+                this.leftEvidence.set(msg.id, list)
+              }
+            }
+          } catch { /* evidence never breaks UX */ }
           if (payload.phase === 'integration' || cardPosted) return
           const status = formatStreamEvent(payload.streamEvent as StreamEvent, {
             redactClinicalPaths: this.config.clinicalOverride === true,
@@ -1307,15 +1685,26 @@ export class MessageProcessor {
       )
 
       const output = result.finalText.trim() || '(No output)'
-      this.history.append('assistant', result.finalText)
-      this.log.info(
-        {
-          event: 'history_assistant_appended',
-          messageId: msg.id,
-          assistantContentLength: result.finalText.length,
-        },
-        'history assistant appended',
-      )
+      if (isNonSubstantiveOutput(output)) {
+        this.log.warn(
+          {
+            event: 'history_assistant_skipped_warning',
+            messageId: msg.id,
+            assistantContentLength: result.finalText.length,
+          },
+          'skipped history append — non-substantive dual-brain output',
+        )
+      } else {
+        this.history.append('assistant', result.finalText)
+        this.log.info(
+          {
+            event: 'history_assistant_appended',
+            messageId: msg.id,
+            assistantContentLength: result.finalText.length,
+          },
+          'history assistant appended',
+        )
+      }
 
       if (cardPosted) {
         // Card already pinned to the ack bubble — ship the integrated answer
