@@ -1,0 +1,23 @@
+[Unit]
+Description=Jev shipped-head advisory shadow CPU service
+After=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=2
+
+[Service]
+Type=simple
+WorkingDirectory=/home/joevoldemort/workspace/jev-omni
+Environment=OMP_NUM_THREADS=16
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u service/jev_service.py --port 30110 --device cpu --autoload
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=90
+MemoryMax=36G
+UMask=0077
+StandardOutput=append:/home/joevoldemort/workspace/jev-omni/service/shadow-cpu.log
+StandardError=append:/home/joevoldemort/workspace/jev-omni/service/shadow-cpu.log
+
+[Install]
+WantedBy=default.target
