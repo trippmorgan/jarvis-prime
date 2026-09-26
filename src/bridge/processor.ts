@@ -9,6 +9,7 @@ import type { QueueMessage } from '../queue/types.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
 import { RaceGate, askHarness, attestRound, sha256, type HarnessRaceConfig, REVIEW_SYSTEM, buildReviewPrompt, parseReview, formatCrossReview, shouldDeliverReview, askJevJudge, isJevVerdict, type ToolEvidence, type Review, type ReviewRecord } from './harness-race.js'
 import { fetchConscience, formatConscienceDigest, citeConscience } from './conscience.js'
+import { buildRoundLabel, appendLabel, matchLabelCommand, latestRoundForChat, labelStats, formatLabelStatus } from './labels.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
 import {
   classifyMessage,
@@ -470,6 +471,25 @@ export class MessageProcessor {
     if (deepCommand !== null) {
       return this.handleDeepCommand(deepCommand, msg, processStart)
     }
+    // /label — Tripp's gold label for the last cross-review round in this chat (Frank-head training set).
+    const labelCommand = matchLabelCommand(msg.text)
+    if (labelCommand !== null) {
+      const last = latestRoundForChat(msg.chatId)
+      let reply: string
+      if (labelCommand.kind === 'label') {
+        if (!last) reply = '🏷️ No cross-review round recorded for this chat yet — nothing to label.'
+        else {
+          const ok = appendLabel({ type: 'human', ts: new Date().toISOString(), messageId: last.messageId, chatId: msg.chatId, questionType: 'verdict', label: labelCommand.label, note: labelCommand.note, by: msg.userId })
+          this.log.info({ event: 'label_human', messageId: last.messageId, label: labelCommand.label, ok }, 'human label')
+          reply = ok ? `🏷️ Labeled "${last.task.slice(0, 50)}${last.task.length > 50 ? '…' : ''}" → ${labelCommand.label}${labelCommand.note ? ` (${labelCommand.note})` : ''}. ${formatLabelStatus(labelStats(), null).split('\n')[0]}` : '🏷️ Label not saved (write failed) — check the label dir.'
+        }
+      } else {
+        reply = formatLabelStatus(labelStats(), last)
+      }
+      await this.deliver(msg.chatId, reply).catch(() => {})
+      this.emitProcessEnd(msg.id, processStart, 'single_brain', 'success', 'legacy', reply)
+      return reply
+    }
 
     this.history.append('user', msg.text)
     this.log.info(
@@ -766,6 +786,10 @@ export class MessageProcessor {
     const concern = reviews.some((r) => r.conscience === 'concern')
     const ccStatus = await attestRound(cfg, 'frank-conscience-check', { ...gate.record, startedAt: record.startedAt }, concern ? 'failed' : 'ok', canon).catch(() => 0)
     this.log.info({ event: 'harness_race_attested', messageId, process: 'frank-conscience-check', status: ccStatus, concern, principles: reviews.flatMap((r) => r.principles), snapshotHash: conscience?.snapshotHash ?? null }, 'ledger attest')
+    // Label collection for a Frank head (2026-09-26): one `round` record per cross-review, reviewers'
+    // verdicts + consensus as weak labels, Jev's probability kept for comparison only. Never blocks.
+    const labelRec = buildRoundLabel({ record, chatId, task: question, harnessText: harness, jarvisText: jarvis, firstDelivered: gate.record.first ?? null, jev })
+    this.log.info({ event: 'label_round', messageId, consensus: labelRec.labels.consensus, reviewer_harness: labelRec.labels.reviewer_harness, reviewer_dual: labelRec.labels.reviewer_dual, ok: appendLabel(labelRec) }, 'round label')
     // Hook 1: fifth PROCESS_RUN `frank-typed-verdict` — ok = Jev judged the round, failed = service unavailable.
     // The probabilities, verdict, position bias and the service's decision hashes are inside the artifact.
     if (cfg.jevUrl) {
