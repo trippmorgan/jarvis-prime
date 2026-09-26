@@ -248,22 +248,20 @@ export interface ReviewRecord {
   conscience?: ConscienceCitation | null
   /** 2026-09-22: what each side executed (hashed on-chain with the rest of the record). */
   evidence?: { harness: ToolEvidence[] | null; jarvis: ToolEvidence[] | null }
-  /** 2026-09-26 hook 1: the Jev-Omni typed verdict (deterministic; recomputable from state+question+options). */
+  /** 2026-09-26 hook 1: the Jev-Omni typed verdict (advisory only; hashes identify evidence, not correctness). */
   jev?: JevResult | null
 }
 
 // ── Hook 1: Jev-Omni typed verdict ────────────────────────────────────────────
-// INTEGRATION.md (2026-09-25/26): the two narrative reviewers can confabulate; a typed decision is
-// (state, question, options) → probabilities in one forward pass, no narrative channel, and the
-// service hashes sha256(state|question|options) so anyone holding this record can recompute it.
-// /judge asks "which response better accomplishes the task" in BOTH orders and averages, because the
-// battery measured a 0.18 position bias. a = harness answer, b = dual-brain answer.
+// Both-order scores are advisory evidence. Hashes identify the local inference records;
+// they do not guarantee calibration, correctness, or exact replay across runtimes.
+// This reviewer has no authority over delivery, Phi, routing, or ledger quality signals.
 
 export interface JevVerdict {
   pHarness: number          // averaged both orders
   pJarvis: number
-  verdict: 'harness' | 'jarvis'
-  strong: boolean           // p < 0.35 or p > 0.65 — a delivery reason on its own
+  verdict: 'harness' | 'jarvis' | 'tie'
+  strong: boolean           // p < 0.35 or p > 0.65 — advisory only; never a delivery reason
   positionBias: number      // service's (P(A|order1)+P(A|order2))/2 − 0.5
   head: string
   order1: string            // decision hashes from the service's decisions.jsonl
@@ -288,17 +286,19 @@ export async function askJevJudge(cfg: HarnessRaceConfig, task: string, harnessA
     const res = await fetchImpl(`${cfg.jevUrl.replace(/\/$/, '')}/judge`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ task: clip(task, 3000), a: clip(harnessAnswer), b: clip(jarvisAnswer) }),
+      body: JSON.stringify({ task: clip(task, 3000), a: clip(harnessAnswer), b: clip(jarvisAnswer), head: 'shipped' }),
       signal: AbortSignal.timeout(cfg.jevTimeoutMs ?? 120_000),
     })
     const ms = Date.now() - start
     if (!res.ok) return { error: `jev HTTP ${res.status}`, ms }
     const d = await res.json() as { ok?: boolean; error?: string; p_a?: number; p_b?: number; verdict?: string; position_bias?: number; head?: string; order1?: string; order2?: string }
     if (d.ok === false || typeof d.p_a !== 'number') return { error: String(d.error ?? 'jev bad response'), ms }
+    const validP = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1
+    if (d.head !== 'shipped' || !validP(d.p_a) || !validP(d.p_b) || Math.abs(d.p_a + d.p_b - 1) > 1e-5 || typeof d.position_bias !== 'number' || !Number.isFinite(d.position_bias) || Math.abs(d.position_bias) > .5 || !d.order1 || !d.order2) return { error: 'jev invalid probabilities, provenance, or non-shipped head', ms }
     const p = d.p_a
     return {
       pHarness: p, pJarvis: typeof d.p_b === 'number' ? d.p_b : 1 - p,
-      verdict: p > 0.5 ? 'harness' : 'jarvis',
+      verdict: p === 0.5 ? 'tie' : p > 0.5 ? 'harness' : 'jarvis',
       strong: p < JEV_STRONG_LOW || p > JEV_STRONG_HIGH,
       positionBias: typeof d.position_bias === 'number' ? d.position_bias : 0,
       head: String(d.head ?? 'shipped'), order1: String(d.order1 ?? ''), order2: String(d.order2 ?? ''), ms,
@@ -401,8 +401,8 @@ export function formatCrossReview(reviews: Review[], jev?: JevResult | null): st
   const bothAgree = reviews.length === 2 && reviews.every((r) => r.agree)
   const concern = reviews.some((r) => r.conscience === 'concern')
   const head = concern ? '⚖️ Cross-review — CONCERN raised' : bothAgree ? '⚖️ Cross-review — the two brains agree' : '⚖️ Cross-review — the two brains disagree'
-  const jevLine = formatJevLine(jev)
-  return `${head}\n${lines.join('\n')}${jevLine ? '\n' + jevLine : ''}`
+  // Jev is advisory shadow data, never user-facing review content.
+  return `${head}\n${lines.join('\n')}`
 }
 
 /**
@@ -417,7 +417,6 @@ export function shouldDeliverReview(reviews: Review[], mode: string = process.en
   if (m === 'never') return { deliver: false, reason: 'never' }
   if (reviews.some((r) => r.conscience === 'concern')) return { deliver: true, reason: 'concern' }
   if (reviews.some((r) => r.issues.length > 0)) return { deliver: true, reason: 'issues' }
-  if (isJevVerdict(jev) && jev.strong) return { deliver: true, reason: 'jev-strong' }
   if (reviews.some((r) => r.verdict === 'unparsed')) return { deliver: false, reason: 'unparsed' }
   if (reviews.length === 2 && reviews.every((r) => r.agree)) return { deliver: false, reason: 'agree' }
   return { deliver: true, reason: 'disagree' }

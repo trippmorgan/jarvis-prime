@@ -222,7 +222,7 @@ describe('hook 1 — Jev-Omni typed verdict', () => {
     await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()))
     const port = (server.address() as { port: number }).port
     const j = await askJevJudge({ url: 'x', model: 'frank', timeoutMs: 1, jevUrl: `http://127.0.0.1:${port}`, jevTimeoutMs: 5000 }, 'Is frank-brain healthy?', 'HARNESS ANSWER', 'JARVIS ANSWER')
-    expect(seen).toEqual({ task: 'Is frank-brain healthy?', a: 'HARNESS ANSWER', b: 'JARVIS ANSWER' })
+    expect(seen).toEqual({ task: 'Is frank-brain healthy?', a: 'HARNESS ANSWER', b: 'JARVIS ANSWER', head: 'shipped' })
     expect(isJevVerdict(j)).toBe(true)
     if (isJevVerdict(j)) { expect(j.verdict).toBe('harness'); expect(j.strong).toBe(true); expect(j.pHarness).toBeCloseTo(0.8219); expect(j.order1).toBe('fecb'); expect(j.head).toBe('shipped') }
   })
@@ -245,13 +245,13 @@ describe('hook 1 — Jev-Omni typed verdict', () => {
     expect(formatJevLine({ error: 'jev HTTP 503', ms: 5 })).toBe('• jev (typed): unavailable — jev HTTP 503')
     expect(formatJevLine(null)).toBe('')
     const s = formatCrossReview([rv({}), rv({ reviewer: 'dual-brain' })], jv(0.82))
-    expect(s).toMatch(/^⚖️ Cross-review — the two brains agree\n• harness reviewing dual-brain[\s\S]*\n• jev \(typed, both orders\): clearly prefers the harness answer/)
+    expect(s).not.toContain('jev')
   })
 
-  it('a strong typed verdict is a delivery reason; a mild one is not', () => {
+  it('shadow verdict strength never changes delivery', () => {
     const agree = [rv({}), rv({ reviewer: 'dual-brain' })]
-    expect(shouldDeliverReview(agree, 'flagged', jv(0.82))).toEqual({ deliver: true, reason: 'jev-strong' })
-    expect(shouldDeliverReview(agree, 'flagged', jv(0.2))).toEqual({ deliver: true, reason: 'jev-strong' })
+    expect(shouldDeliverReview(agree, 'flagged', jv(0.82))).toEqual({ deliver: false, reason: 'agree' })
+    expect(shouldDeliverReview(agree, 'flagged', jv(0.2))).toEqual({ deliver: false, reason: 'agree' })
     expect(shouldDeliverReview(agree, 'flagged', jv(0.55))).toEqual({ deliver: false, reason: 'agree' })
     expect(shouldDeliverReview(agree, 'flagged', { error: 'down', ms: 1 })).toEqual({ deliver: false, reason: 'agree' })
     expect(shouldDeliverReview([rv({ conscience: 'concern' }), rv({ reviewer: 'dual-brain' })], 'flagged', jv(0.9)).reason).toBe('concern')

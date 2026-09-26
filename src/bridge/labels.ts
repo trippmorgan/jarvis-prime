@@ -2,15 +2,11 @@
  * labels.ts — label collection for a Frank-specific Jev head (2026-09-26, per Tripp:
  * "start collecting labels for a frank head").
  *
- * INTEGRATION.md / REFIT-RESULTS.md: the shipped Jev head has no prior competence on Frank's own
- * decisions; a Frank head needs ≥250 labeled decisions per question type, from judge verdicts and
- * Tripp's corrections (router outputs are weak labels), split by scenario, with an abstain option.
+ * Legacy self-review consensus and user corrections are weak or potentially unblinded labels.
+ * They are not independent gold labels. No minimum sample count or improvement is established.
+ * Independent, blind human declarations live separately in shadow-review.ts and are exported
+ * only with reviewer provenance and scenario-family groups. Never auto-promote legacy labels.
  *
- * Question type collected here: VERDICT — "which answer better accomplishes the task", the same
- * question hook 1 asks Jev. Every cross-review round appends one `round` record (task + both answers
- * + the two narrative reviewers' verdicts + their consensus + Jev's own probability, kept for
- * comparison and NEVER used as a label). Tripp's `/label` reply appends a `human` record for the
- * latest round in that chat — that is the gold label. Append-only JSONL; the training script merges.
  * Records hold answer text (mortal, private) — they live next to the round evidence, not in git.
  */
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
@@ -169,5 +165,5 @@ export function formatLabelStatus(st: LabelStats, last: RoundLabelRecord | null)
   const h = Object.entries(st.humanLabels).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'
   const j = st.jevAgreesWithHuman.n ? ` · Jev agrees with you ${st.jevAgreesWithHuman.agree}/${st.jevAgreesWithHuman.n}` : ''
   const lastLine = last ? `\nLast round here: "${last.task.slice(0, 60)}${last.task.length > 60 ? '…' : ''}" — reviewers ${last.labels.reviewer_harness}/${last.labels.reviewer_dual}, Jev ${last.jev ? Math.round(last.jev.pHarness * 100) + '% harness' : 'n/a'}` : ''
-  return `🏷️ Frank-head labels (verdict): ${st.rounds} rounds, ${st.human} yours (${h}); reviewer consensus: ${c}${j}. Target ≥250 per type.${lastLine}\nReply /label harness | jarvis | both | neither [note] to label the last round.`
+  return `🏷️ Frank-head labels (verdict): ${st.rounds} rounds, ${st.human} yours (${h}); reviewer consensus: ${c}${j}. Legacy labels are not independently blinded.${lastLine}\nReply /label harness | jarvis | both | neither [note] to label the last round.`
 }

@@ -1,3 +1,4 @@
+import { collectShadow } from './shadow-review.js'
 import type { FastifyBaseLogger } from 'fastify'
 import { join } from 'node:path'
 import { spawnClaudeStream } from '../claude/spawner-stream.js'
@@ -7,7 +8,7 @@ import type { LeftRuntime } from './mode-state.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
-import { RaceGate, askHarness, attestRound, sha256, type HarnessRaceConfig, REVIEW_SYSTEM, buildReviewPrompt, parseReview, formatCrossReview, shouldDeliverReview, askJevJudge, isJevVerdict, type ToolEvidence, type Review, type ReviewRecord } from './harness-race.js'
+import { RaceGate, askHarness, attestRound, sha256, type HarnessRaceConfig, REVIEW_SYSTEM, buildReviewPrompt, parseReview, formatCrossReview, shouldDeliverReview, type ToolEvidence, type Review, type ReviewRecord } from './harness-race.js'
 import { fetchConscience, formatConscienceDigest, citeConscience } from './conscience.js'
 import { buildRoundLabel, appendLabel, matchLabelCommand, latestRoundForChat, labelStats, formatLabelStatus } from './labels.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
@@ -471,7 +472,7 @@ export class MessageProcessor {
     if (deepCommand !== null) {
       return this.handleDeepCommand(deepCommand, msg, processStart)
     }
-    // /label — Tripp's gold label for the last cross-review round in this chat (Frank-head training set).
+    // /label — Tripp's potentially unblinded correction for the last cross-review round in this chat (Frank-head training set).
     const labelCommand = matchLabelCommand(msg.text)
     if (labelCommand !== null) {
       const last = latestRoundForChat(msg.chatId)
@@ -745,6 +746,9 @@ export class MessageProcessor {
     const harnessEv = gate.harnessEvidence ?? []
     const jarvisEv = this.leftEvidence.get(messageId) ?? []
     this.leftEvidence.delete(messageId)
+    // Durable, private shadow collection is independent of reviewer latency and delivery.
+    // Natural-path races only; never send clinical override traffic to this collector.
+    if (!this.config.clinicalOverride) collectShadow(cfg, { messageId, chatId, task: question, harness, jarvis, evidence: { harness: harnessEv, jarvis: jarvisEv } }, (status) => this.log.info({ event: 'jev_shadow', messageId, status }, 'advisory shadow'))
     // The network's chain-attested conscience (lifecoin README §9) — both reviewers judge against the
     // same STANDING PRINCIPLES Prime uses, and the record cites the snapshot hash in force. Fail-soft.
     const conscience = await fetchConscience({ kernelUrl: cfg.ledgerKernelUrl, token: cfg.kernelToken })
@@ -757,21 +761,15 @@ export class MessageProcessor {
     const dualSide = right.call({ system: REVIEW_SYSTEM, user: buildReviewPrompt(question, jarvis, harness, { other: harnessMem, conscience: digest, mineEvidence: jarvisEv, otherEvidence: harnessEv }), timeoutMs: 180_000 })
       .then((r) => parseReview('dual-brain', r.content, r.durationMs))
       .catch((e: unknown) => ({ reviewer: 'dual-brain', verdict: 'unparsed', agree: false, issues: [], unverified: [], omissions: [], conscience: 'ok', principles: [], note: `review failed: ${e instanceof Error ? e.message : String(e)}`, ms: Date.now() - t0 } as Review))
-    // Hook 1 (2026-09-26): the Jev-Omni typed verdict runs alongside the two narrative reviewers.
-    // Deterministic, position-balanced, hashed by the service; rides inside this record on-chain. Fail-soft.
-    const jevSide = askJevJudge(cfg, question, harness, jarvis)
-    const [reviews, jev] = await Promise.all([Promise.all([harnessSide, dualSide]), jevSide])
-    this.log.info(isJevVerdict(jev)
-      ? { event: 'jev_verdict', messageId, pHarness: jev.pHarness, verdict: jev.verdict, strong: jev.strong, positionBias: jev.positionBias, head: jev.head, durationMs: jev.ms }
-      : { event: 'jev_verdict', messageId, error: jev.error, durationMs: jev.ms }, 'jev typed verdict')
-    const record: ReviewRecord = { messageId, inboundHash: gate.record.inboundHash, jarvisHash: sha256(jarvis), harnessHash: sha256(harness), reviews, startedAt: new Date(t0).toISOString(), conscience: citeConscience(conscience), jev, evidence: { harness: harnessEv, jarvis: jarvisEv } }
-    const summary = formatCrossReview(reviews, jev)
+    const reviews = await Promise.all([harnessSide, dualSide])
+    const record: ReviewRecord = { messageId, inboundHash: gate.record.inboundHash, jarvisHash: sha256(jarvis), harnessHash: sha256(harness), reviews, startedAt: new Date(t0).toISOString(), conscience: citeConscience(conscience), evidence: { harness: harnessEv, jarvis: jarvisEv } }
+    const summary = formatCrossReview(reviews)
     this.log.info({ event: 'cross_review_done', messageId, durationMs: Date.now() - t0, verdicts: reviews.map((r) => `${r.reviewer}:${r.verdict}`), concern: reviews.some((r) => r.conscience === 'concern') }, 'cross-review done')
     // 2026-09-17 (Tripp: three messages per turn is a lot). FRANK_CROSS_REVIEW_DELIVERY =
     //   flagged (default) → deliver only when the brains disagree, find issues, or raise a concern
     //   always            → every round (previous behaviour)
     //   never             → chain only, never message
-    const delivery = shouldDeliverReview(reviews, undefined, jev)
+    const delivery = shouldDeliverReview(reviews)
     if (delivery.deliver) {
       for (const chunk of splitMessage(summary)) await this.deliver(chatId, chunk).catch(() => {})
     }
@@ -787,15 +785,9 @@ export class MessageProcessor {
     const ccStatus = await attestRound(cfg, 'frank-conscience-check', { ...gate.record, startedAt: record.startedAt }, concern ? 'failed' : 'ok', canon).catch(() => 0)
     this.log.info({ event: 'harness_race_attested', messageId, process: 'frank-conscience-check', status: ccStatus, concern, principles: reviews.flatMap((r) => r.principles), snapshotHash: conscience?.snapshotHash ?? null }, 'ledger attest')
     // Label collection for a Frank head (2026-09-26): one `round` record per cross-review, reviewers'
-    // verdicts + consensus as weak labels, Jev's probability kept for comparison only. Never blocks.
-    const labelRec = buildRoundLabel({ record, chatId, task: question, harnessText: harness, jarvisText: jarvis, firstDelivered: gate.record.first ?? null, jev })
+    // verdicts + consensus remain weak labels. Shadow scores live separately.
+    const labelRec = buildRoundLabel({ record, chatId, task: question, harnessText: harness, jarvisText: jarvis, firstDelivered: gate.record.first ?? null, jev: null })
     this.log.info({ event: 'label_round', messageId, consensus: labelRec.labels.consensus, reviewer_harness: labelRec.labels.reviewer_harness, reviewer_dual: labelRec.labels.reviewer_dual, ok: appendLabel(labelRec) }, 'round label')
-    // Hook 1: fifth PROCESS_RUN `frank-typed-verdict` — ok = Jev judged the round, failed = service unavailable.
-    // The probabilities, verdict, position bias and the service's decision hashes are inside the artifact.
-    if (cfg.jevUrl) {
-      const tvStatus = await attestRound(cfg, 'frank-typed-verdict', { ...gate.record, startedAt: record.startedAt }, isJevVerdict(jev) ? 'ok' : 'failed', canon).catch(() => 0)
-      this.log.info({ event: 'harness_race_attested', messageId, process: 'frank-typed-verdict', status: tvStatus, verdict: isJevVerdict(jev) ? jev.verdict : null, strong: isJevVerdict(jev) ? jev.strong : null }, 'ledger attest')
-    }
   }
 
   /** Record the primary path's result on the gate and chain the round. */

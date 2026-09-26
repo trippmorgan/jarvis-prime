@@ -51,6 +51,6 @@ describe('Frank-head label collection', () => {
     const st = labelStats()
     expect(st.rounds).toBe(1); expect(st.human).toBe(1); expect(st.consensus).toEqual({ equal: 1 }); expect(st.humanLabels).toEqual({ jarvis: 1 })
     expect(st.jevAgreesWithHuman).toEqual({ n: 1, agree: 0 })
-    expect(formatLabelStatus(st, r)).toMatch(/1 rounds, 1 yours \(jarvis 1\); reviewer consensus: equal 1 · Jev agrees with you 0\/1\. Target ≥250 per type\.\nLast round here: "q" — reviewers equal\/equal, Jev 88% harness/)
+    expect(formatLabelStatus(st, r)).toMatch(/1 rounds, 1 yours \(jarvis 1\); reviewer consensus: equal 1 · Jev agrees with you 0\/1\. Legacy labels are not independently blinded\.\nLast round here: "q" — reviewers equal\/equal, Jev 88% harness/)
   })
 })
