@@ -32,6 +32,11 @@ export interface HarnessRaceConfig {
   kernelToken?: string       // bearer for kernel reads (the conscience); empty = reviewers judge without it
   jevUrl?: string            // Jev-Omni typed-decision service (jev_service.py, default :30110); empty = no typed verdict
   jevTimeoutMs?: number      // CPU-resident Jev answers a both-orders judge in ~30 s; GPU in 0.2 s
+  jevRouting?: boolean       // Hold candidates and route one selected answer into delivery.
+  jevDeliveryGate?: boolean  // Judge after generators finish; skip the GPU service's bridge-idle wait.
+  jevRouteTimeoutMs?: number
+  jevCandidateWaitMs?: number
+  jevRouteMargin?: number
 }
 
 export interface HarnessAnswer {
@@ -86,6 +91,8 @@ export interface RoundRecord {
   jarvis?: { hash: string; chars: number; ms: number; path?: string; outcome?: string }
   harness?: { hash: string; chars: number; ms: number; mode: string } | { error: string; ms: number }
   first?: 'jarvis' | 'harness'
+  // 2026-10-10 — Jev front-end route decision (bridge/jev-front.ts); hashed into the round evidence like the rest.
+  route?: import('./jev-front.js').JevRouteRecord
 }
 
 export function sha256(text: string): string {
@@ -191,9 +198,15 @@ export class RaceGate {
   harnessEvidence: ToolEvidence[] | null = null
   jarvisEvidence: ToolEvidence[] | null = null
   reviewStarted = false
+  routing = false
+  selectionComplete = false
+  routingResult?: JevResult
+  readonly harnessDone: Promise<void>
+  private resolveHarness!: () => void
   private first: 'jarvis' | 'harness' | null = null
 
   constructor(messageId: string, chatId: string, inboundText: string) {
+    this.harnessDone = new Promise(resolve => { this.resolveHarness = resolve })
     this.inboundText = inboundText
     this.record = {
       messageId, chatId,
@@ -209,6 +222,7 @@ export class RaceGate {
   }
 
   get winner(): 'jarvis' | 'harness' | null { return this.first }
+  completeHarness(): void { this.resolveHarness() }
 
   /** Label the harness answer for Telegram delivery, depending on arrival order. */
   static labelHarness(answer: HarnessAnswer, wasFirst: boolean): string {
@@ -255,13 +269,13 @@ export interface ReviewRecord {
 // ── Hook 1: Jev-Omni typed verdict ────────────────────────────────────────────
 // Both-order scores are advisory evidence. Hashes identify the local inference records;
 // they do not guarantee calibration, correctness, or exact replay across runtimes.
-// This reviewer has no authority over delivery, Phi, routing, or ledger quality signals.
+// The delivery gate can use these scores for answer selection. They do not establish Phi or ledger quality.
 
 export interface JevVerdict {
   pHarness: number          // averaged both orders
   pJarvis: number
   verdict: 'harness' | 'jarvis' | 'tie'
-  strong: boolean           // p < 0.35 or p > 0.65 — advisory only; never a delivery reason
+  strong: boolean           // p < 0.35 or p > 0.65; routing has a separate both-order policy.
   positionBias: number      // service's (P(A|order1)+P(A|order2))/2 − 0.5
   head: string
   order1: string            // decision hashes from the service's decisions.jsonl
@@ -286,8 +300,8 @@ export async function askJevJudge(cfg: HarnessRaceConfig, task: string, harnessA
     const res = await fetchImpl(`${cfg.jevUrl.replace(/\/$/, '')}/judge`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ task: clip(task, 3000), a: clip(harnessAnswer), b: clip(jarvisAnswer), head: 'shipped' }),
-      signal: AbortSignal.timeout(cfg.jevTimeoutMs ?? 120_000),
+      body: JSON.stringify({ task: clip(task, 3000), a: clip(harnessAnswer), b: clip(jarvisAnswer), head: 'shipped', ...(cfg.jevDeliveryGate ? { delivery_gate: true } : {}) }),
+      signal: AbortSignal.timeout(cfg.jevTimeoutMs ?? 240_000),
     })
     const ms = Date.now() - start
     if (!res.ok) return { error: `jev HTTP ${res.status}`, ms }

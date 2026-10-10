@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Config } from "./config.js";
 import { MessageProcessor } from "./bridge/processor.js";
+import { parseFrontMode } from "./bridge/jev-front.js";
 import { registerMessageRoute } from "./routes/message.js";
 import { registerChatCompletionsRoute, guardDelivery, guardSurface } from "./routes/chat-completions.js";
 import { TelegramPoller } from "./telegram/poller.js";
@@ -108,7 +109,20 @@ export async function buildServer(config: Config): Promise<ServerContext> {
         kernelToken: process.env.KERNEL_TOKEN,
         // Hook 1 (2026-09-26): Jev-Omni typed verdict in the cross-review. FRANK_JEV=0 disables.
         jevUrl: /^(0|false|off|no)$/i.test(process.env.FRANK_JEV ?? '') ? undefined : (process.env.FRANK_JEV_URL ?? 'http://127.0.0.1:30110'),
-        jevTimeoutMs: Number(process.env.FRANK_JEV_TIMEOUT_MS ?? 120_000),
+        jevTimeoutMs: Number(process.env.FRANK_JEV_TIMEOUT_MS ?? 240_000),
+        jevRouting: !/^(0|false|off|no)$/i.test(process.env.FRANK_JEV_ROUTING ?? ''),
+        jevRouteTimeoutMs: Number(process.env.FRANK_JEV_ROUTE_TIMEOUT_MS ?? 90_000),
+        jevCandidateWaitMs: Number(process.env.FRANK_JEV_CANDIDATE_WAIT_MS ?? 30_000),
+        jevRouteMargin: Number(process.env.FRANK_JEV_ROUTE_MARGIN ?? 0.05),
+      },
+      // 2026-10-10 — Jev front end (bridge/jev-front.ts). FRANK_JEV_FRONT=off|shadow|harness|all,
+      // FRANK_JEV_FRONT_DEVICE=gpu|cpu, FRANK_JEV_FRONT_TIMEOUT_MS, FRANK_JEV_FRONT_STRONG.
+      jevFront: {
+        jevUrl: /^(0|false|off|no)$/i.test(process.env.FRANK_JEV ?? '') ? undefined : (process.env.FRANK_JEV_URL ?? 'http://127.0.0.1:30110'),
+        mode: parseFrontMode(process.env.FRANK_JEV_FRONT),
+        device: (process.env.FRANK_JEV_FRONT_DEVICE ?? 'gpu').toLowerCase() === 'cpu' ? 'cpu' : 'gpu',
+        timeoutMs: Number(process.env.FRANK_JEV_FRONT_TIMEOUT_MS ?? 120_000),
+        strong: Number(process.env.FRANK_JEV_FRONT_STRONG ?? 0.6),
       },
       reporter,
       telegramSurface,

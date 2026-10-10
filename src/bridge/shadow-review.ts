@@ -39,21 +39,30 @@ export function localService(url: string): boolean {
   try { const u = new URL(url); return u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname) && !u.username && !u.password && !u.search && !u.hash && u.pathname === '/' }
   catch { return false }
 }
-export async function evaluateShadow(cfg: HarnessRaceConfig, c: ShadowCase, dir = shadowDir(), fetchImpl: typeof fetch = fetch, onResult?: (result: JevResult) => void): Promise<string> {
+export async function evaluateShadow(cfg: HarnessRaceConfig, c: ShadowCase, dir = shadowDir(), fetchImpl: typeof fetch = fetch, onResult?: (result: JevResult) => void, deliveryGate = false): Promise<string> {
   return withShadowLock(dir, async () => {
-    if (ids(dir, 'predictions').includes(c.id)) return 'already-recorded'
+    if (ids(dir, 'predictions').includes(c.id)) {
+      onResult?.(read<{ result: JevResult }>(dir, 'predictions', c.id).result)
+      return 'already-recorded'
+    }
     if (!cfg.jevUrl || !localService(cfg.jevUrl)) throw new Error('Shadow requires a loopback HTTP Jev service')
     const localFetch: typeof fetch = (url, init) => fetchImpl(url, { ...init, redirect: 'error' })
     const health = await localFetch(`${cfg.jevUrl.replace(/\/$/, '')}/health`, { signal: AbortSignal.timeout(2000) })
     if (!health.ok) throw new Error(`Health HTTP ${health.status}`)
-    const h = await health.json() as { loaded?: boolean; device?: string }
-    if (h.loaded !== true || h.device !== 'cpu') throw new Error('Shadow requires an already-loaded CPU model')
-    const result = await askJevJudge({ ...cfg, jevTimeoutMs: cfg.jevTimeoutMs ?? 240000 }, c.task, c.harness, c.jarvis, localFetch)
+    const h = await health.json() as { loaded?: boolean; device?: string; mode?: string; restore_pending?: boolean; status?: string }
+    if (deliveryGate) {
+      if (h.loaded !== true || (h.mode === 'gpu-swap' ? !['cpu', 'cuda'].includes(h.device ?? '') || !['parked', 'gpu'].includes(h.status ?? '') : h.device !== 'cpu' || h.restore_pending === true)) throw new Error('Jev routing requires a ready CPU or explicitly declared GPU-swap model')
+    } else if (h.loaded !== true || h.device !== 'cpu') throw new Error('Shadow requires an already-loaded CPU model')
+    const result = await askJevJudge({ ...cfg, jevDeliveryGate: deliveryGate, jevTimeoutMs: cfg.jevTimeoutMs ?? 240000 }, c.task, c.harness, c.jarvis, localFetch)
     if ('error' in result) throw new Error(result.error)
-    save(dir, 'predictions', c.id, { schema: 1, caseId: c.id, createdAt: new Date().toISOString(), advisory: true, result, inputPolicy: 'task:first3000; answers:first6000; truncation-marker appended; evidence excluded' })
+    save(dir, 'predictions', c.id, { schema: 1, caseId: c.id, createdAt: new Date().toISOString(), advisory: !deliveryGate, purpose: deliveryGate ? 'answer-routing' : 'shadow', result, inputPolicy: 'task:first3000; answers:first6000; truncation-marker appended; evidence excluded' })
     try { onResult?.(result) } catch { /* advisory consumers cannot affect the record */ }
     return 'recorded'
   })
+}
+
+export function recordAnswerSelection(c: ShadowCase, selection: unknown, dir = shadowDir()): void {
+  save(dir, 'selections', c.id, { schema: 1, caseId: c.id, createdAt: new Date().toISOString(), selection })
 }
 
 // One in-flight request. All cases persist even when busy; `drain` retries pending ones.

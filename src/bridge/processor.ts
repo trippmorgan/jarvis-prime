@@ -1,4 +1,5 @@
-import { collectShadow } from './shadow-review.js'
+import { collectShadow, collectCase, evaluateShadow, recordAnswerSelection } from './shadow-review.js'
+import { selectAnswerRoute, waitForCandidate, type AnswerRoute } from './jev-routing.js'
 import type { FastifyBaseLogger } from 'fastify'
 import { join } from 'node:path'
 import { spawnClaudeStream } from '../claude/spawner-stream.js'
@@ -9,6 +10,7 @@ import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
 import { RaceGate, askHarness, attestRound, sha256, type HarnessRaceConfig, REVIEW_SYSTEM, buildReviewPrompt, parseReview, formatCrossReview, shouldDeliverReview, formatJevLine, isJevVerdict, type ToolEvidence, type Review, type ReviewRecord } from './harness-race.js'
+import { askJevRoute, isJevRoute, laneForRoute, routeRecord, type JevFrontConfig, type JevRouteRecord } from './jev-front.js'
 import { fetchConscience, formatConscienceDigest, citeConscience } from './conscience.js'
 import { buildRoundLabel, appendLabel, matchLabelCommand, latestRoundForChat, labelStats, formatLabelStatus } from './labels.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
@@ -231,12 +233,15 @@ export interface ProcessorConfig {
    * and the round is chained on the jarvis ledger. See bridge/harness-race.ts.
    */
   harnessRace?: HarnessRaceConfig
+  /** 2026-10-10 — Jev as the front end: route decision before the brains start (bridge/jev-front.ts). */
+  jevFront?: JevFrontConfig
 }
 
 export class MessageProcessor {
   private readonly queue: MessageQueue
   /** 2026-09-22: per-message LEFT tool evidence (commands + result snippets) for the cross-review. */
   private readonly leftEvidence = new Map<string, ToolEvidence[]>()
+  private readonly answerSelectors = new Map<string, (text: string, failed: boolean) => Promise<string>>()
   private readonly deliver: DeliverFn
   private readonly config: ProcessorConfig
   private readonly log: FastifyBaseLogger
@@ -614,6 +619,25 @@ export class MessageProcessor {
 
     const tier0Shortcut = tier0?.route === 'quick_q' && this.modeState.current !== 'dual'
 
+    // 2026-10-10 (Tripp: "jev must be integrated into controlling routing" / "use gpu and switch models in
+    // and out"): Jev decides what the message needs before the brains start. `harness` mode lets the answer
+    // pick the harness lane; `all` mode also lets a confident `quick` skip the dual-brain for this turn.
+    // Below the confidence gate the existing router decides and Jev's view is only logged + chained.
+    const front = this.config.jevFront
+    let jevLane: string | undefined
+    let jevRouteRec: JevRouteRecord | undefined
+    let jevQuick = false
+    if (front && front.mode !== 'off' && front.jevUrl && classification.kind === 'natural' && !this.config.clinicalOverride) {
+      const prior = this.history.getRecent(6).filter((h) => !(h.role === 'user' && h.content === msg.text))
+      const r = await askJevRoute(front, msg.text, prior)
+      const applied = isJevRoute(r) && r.confidence >= front.strong && (front.mode === 'harness' || front.mode === 'all')
+      const lane = applied && isJevRoute(r) ? laneForRoute(r.route) : (this.config.harnessRace?.model ?? 'frank')
+      jevRouteRec = routeRecord(front, r, applied, lane)
+      if (applied) jevLane = lane
+      jevQuick = applied && front.mode === 'all' && isJevRoute(r) && r.route === 'quick'
+      this.log.info({ event: 'jev_front_route', messageId: msg.id, mode: front.mode, device: front.device, ...(isJevRoute(r) ? { route: r.route, confidence: r.confidence, p: r.p, servedOn: r.device, hash: r.hash } : { error: r.error }), ms: r.ms, applied, lane, quick: jevQuick }, 'jev front-end route')
+    }
+
     // 2026-04-23 — Dual-brain is now opt-in via /deep. Default flow is
     // single-brain Claude with tools-on. Set the mode to 'dual' via /deep
     // to engage the corpus-callosum orchestrator.
@@ -621,6 +645,7 @@ export class MessageProcessor {
       classification.kind === 'natural' &&
       !shortFastLane &&
       !tier0Shortcut &&
+      !jevQuick &&
       this.config.corpusCallosumEnabled &&
       this.modeState.current === 'dual' &&
       this.orchestrator !== undefined
@@ -640,12 +665,20 @@ export class MessageProcessor {
     })
 
     // Harness race: fan out to the second brain before the primary path runs.
-    const race = classification.kind === 'natural' ? this.startHarnessRace(msg) : null
+    const race = classification.kind === 'natural' ? this.startHarnessRace(msg, jevLane, jevRouteRec) : null
+
+    if (race?.routing) {
+      let selected: Promise<string> | undefined
+      this.answerSelectors.set(msg.id, (text, failed) => selected ??= this.selectRaceAnswer(race, text, failed, processStart, useDualBrain ? 'dual_brain' : 'single_brain'))
+    }
+
+    try {
 
     if (useDualBrain) {
       this.log.info({ event: 'route_dual_brain', messageId: msg.id }, 'routing via dual-brain')
       const reply = await this.processDualBrain(msg, processStart)
-      this.finishHarnessRace(race, reply, processStart, 'dual_brain')
+      if (!race?.routing) this.finishHarnessRace(race, reply, processStart, 'dual_brain')
+      else void this.maybeCrossReview(race)
       return reply
     }
 
@@ -655,7 +688,7 @@ export class MessageProcessor {
     // decision, just a faster response.
     const singleBrainKind: OrchestratorKind = shortFastLane
       ? 'short_msg_fast_lane'
-      : tier0Shortcut
+      : tier0Shortcut || jevQuick
         ? 'tier0_quick'
         : this.resolveSingleBrainKind(classification.kind)
 
@@ -671,8 +704,57 @@ export class MessageProcessor {
       'routing via single-brain bypass',
     )
     const reply = await this.processSingleBrain(msg, processStart, singleBrainKind)
-    this.finishHarnessRace(race, reply, processStart, 'single_brain')
+    if (!race?.routing) this.finishHarnessRace(race, reply, processStart, 'single_brain')
+    else void this.maybeCrossReview(race)
     return reply
+    } finally {
+      this.answerSelectors.delete(msg.id)
+    }
+  }
+
+  private resolveAnswer(msg: QueueMessage, text: string, failed = false): Promise<string> {
+    return this.answerSelectors.get(msg.id)?.(text, failed) ?? Promise.resolve(text)
+  }
+
+  private async selectRaceAnswer(gate: RaceGate, primary: string, failed: boolean, processStart: number, path: string): Promise<string> {
+    const cfg = this.config.harnessRace!
+    this.finishHarnessRace(gate, primary, processStart, path)
+    const bounded = (value: number | undefined, fallback: number, min: number, max: number) => Number.isFinite(value) ? Math.min(max, Math.max(min, value!)) : fallback
+    await waitForCandidate(gate.harnessDone, bounded(cfg.jevCandidateWaitMs, 30_000, 0, 120_000))
+    const harness = gate.harnessText
+    const primaryAvailable = !failed && !isNonSubstantiveOutput(primary)
+    let route: AnswerRoute = { selected: 'jarvis', reason: 'harness-unavailable' }
+    if (harness && !isNonSubstantiveOutput(harness)) {
+      if (!primaryAvailable) route = { selected: 'harness', reason: 'primary-unavailable' }
+      else {
+        let result: import('./harness-race.js').JevResult | undefined
+        let c: ReturnType<typeof collectCase> | undefined
+        try {
+          c = collectCase({ messageId: gate.record.messageId, chatId: gate.record.chatId, task: gate.inboundText, harness, jarvis: primary,
+            evidence: { harness: gate.harnessEvidence ?? [], jarvis: this.leftEvidence.get(gate.record.messageId) ?? [] } })
+          await evaluateShadow({ ...cfg, jevTimeoutMs: bounded(cfg.jevRouteTimeoutMs, 90_000, 100, 180_000) }, c, undefined, fetch, r => { result = r }, true)
+        } catch (e) {
+          // The fallback remains deliverable even if inference or private persistence fails.
+          result = { error: e instanceof Error ? e.message : String(e), ms: 0 }
+          this.log.warn({ event: 'jev_route_unavailable', messageId: gate.record.messageId }, 'Jev routing unavailable; using primary')
+        }
+        gate.routingResult = result
+        route = selectAnswerRoute(result, bounded(cfg.jevRouteMargin, 0.05, 0, 0.49))
+        if (c) {
+          try { recordAnswerSelection(c, { ...route, result, primaryPath: path }) } catch {
+            this.log.warn({ event: 'jev_selection_record_failed', messageId: gate.record.messageId }, 'selection persistence failed')
+          }
+        }
+      }
+    }
+    gate.selectionComplete = true
+    const selected = route.selected === 'harness' ? harness! : primary
+    // Error paths ordinarily omit history; a recovered harness answer is a real final turn.
+    if (failed && route.selected === 'harness') this.history.append('assistant', selected)
+    this.log.info({ event: 'jev_answer_route', messageId: gate.record.messageId, ...route,
+      pHarness: isJevVerdict(gate.routingResult) ? gate.routingResult.pHarness : null,
+      positionBias: isJevVerdict(gate.routingResult) ? gate.routingResult.positionBias : null }, 'Jev selected final answer')
+    return selected
   }
 
   // ── Harness race ("two Franks, one receiver") ──────────────────────────────
@@ -683,10 +765,13 @@ export class MessageProcessor {
    * passed as the question). Delivery, history append and chaining happen when
    * it resolves; nothing here blocks the primary path.
    */
-  private startHarnessRace(msg: QueueMessage): RaceGate | null {
-    const cfg = this.config.harnessRace
-    if (!cfg) return null
+  private startHarnessRace(msg: QueueMessage, lane?: string, route?: JevRouteRecord): RaceGate | null {
+    const base = this.config.harnessRace
+    if (!base) return null
+    const cfg: HarnessRaceConfig = lane && lane !== base.model ? { ...base, model: lane } : base   // Jev-chosen harness lane (jev-front.ts)
     const gate = new RaceGate(msg.id, msg.chatId, msg.text)
+    if (route) gate.record.route = route
+    gate.routing = !!cfg.jevRouting && !!cfg.jevUrl && !this.config.clinicalOverride
     // Shared history minus the just-appended user turn, and minus the harness's OWN prior views —
     // seeing them made it comment on the earlier disagreement instead of answering (round 3, 2026-09-16).
     const prior = this.history.getRecent(14)
@@ -700,6 +785,14 @@ export class MessageProcessor {
         const wasFirst = gate.claimFirst('harness')
         gate.record.harness = { hash: sha256(answer.text), chars: answer.text.length, ms: answer.ms, mode: answer.mode }
         this.log.info({ event: 'harness_race_answer', messageId: msg.id, mode: answer.mode, durationMs: answer.ms, chars: answer.text.length, first: wasFirst }, 'harness race answer')
+        gate.harnessText = answer.text
+        gate.harnessMemory = answer.memory ?? null
+        gate.harnessEvidence = answer.evidence ?? []
+        gate.completeHarness()
+        if (gate.routing) {
+          void attestRound(cfg, 'frank-harness-answer', gate.record, 'ok')
+          return
+        }
         const labeled = RaceGate.labelHarness(answer, wasFirst)
         for (const chunk of splitMessage(labeled)) {
           await this.deliver(msg.chatId, chunk).catch(() => {})
@@ -715,6 +808,7 @@ export class MessageProcessor {
         const ms = Date.now() - startedAt
         const error = err instanceof Error ? err.message : String(err)
         gate.record.harness = { error, ms }
+        gate.completeHarness()
         this.log.warn({ event: 'harness_race_error', messageId: msg.id, durationMs: ms, error }, 'harness race error')
         void attestRound(cfg, 'frank-harness-answer', gate.record, 'failed')
       },
@@ -732,7 +826,7 @@ export class MessageProcessor {
    */
   private async maybeCrossReview(gate: RaceGate): Promise<void> {
     const cfg = this.config.harnessRace
-    if (!cfg || gate.reviewStarted || gate.jarvisText === null || gate.harnessText === null) return
+    if (!cfg || gate.reviewStarted || gate.jarvisText === null || gate.harnessText === null || (gate.routing && !gate.selectionComplete)) return
     if (/^(0|false|off|no)$/i.test(process.env.FRANK_CROSS_REVIEW ?? '')) return
     gate.reviewStarted = true
     const { messageId, chatId } = gate.record
@@ -751,7 +845,7 @@ export class MessageProcessor {
     // 2026-10-10 (Tripp: "put the Jev line back in Telegram"): when the shadow prediction lands (~15-30 s on
     // the GPU-swap service) one advisory line follows the answer. FRANK_JEV_TELEGRAM=0 silences it. Advisory
     // only: it never changes delivery, ties, routing, the ledger records or the shadow store.
-    if (!this.config.clinicalOverride) collectShadow(cfg, { messageId, chatId, task: question, harness, jarvis, evidence: { harness: harnessEv, jarvis: jarvisEv } }, (status, result) => {
+    if (!this.config.clinicalOverride && !gate.routing) collectShadow(cfg, { messageId, chatId, task: question, harness, jarvis, evidence: { harness: harnessEv, jarvis: jarvisEv } }, (status, result) => {
       this.log.info({ event: 'jev_shadow', messageId, status }, 'advisory shadow')
       if (status !== 'recorded' || !result || !isJevVerdict(result) || /^(0|false|off|no)$/i.test(process.env.FRANK_JEV_TELEGRAM ?? '')) return
       const line = `Jev (advisory) ${formatJevLine(result).replace(/^• /, '')}`
@@ -1102,21 +1196,21 @@ export class MessageProcessor {
       clearTimeout(ackTimer)
 
       if (result.timedOut) {
-        const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
+        const errorMsg = await this.resolveAnswer(msg, 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.', true)
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
         this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'legacy', errorMsg)
         return errorMsg
       }
 
       if (result.exitCode !== 0 && !result.output.trim()) {
-        const errorMsg = `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`
+        const errorMsg = await this.resolveAnswer(msg, `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`, true)
         this.log.error({ exitCode: result.exitCode, stderrLength: result.stderr.length }, 'Claude CLI error')
         await this.deliverWithLogging(msg.id, msg.chatId, errorMsg, 'error')
         this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'legacy', errorMsg)
         return errorMsg
       }
 
-      const output = result.output.trim() || '(No output)'
+      const output = await this.resolveAnswer(msg, result.output.trim() || '(No output)')
       if (isNonSubstantiveOutput(output)) {
         this.log.warn(
           {
@@ -1151,7 +1245,7 @@ export class MessageProcessor {
       return output
     } catch (err) {
       clearTimeout(ackTimer)
-      const errorMsg = `Internal error: ${err instanceof Error ? err.message : String(err)}`
+      const errorMsg = await this.resolveAnswer(msg, `Internal error: ${err instanceof Error ? err.message : String(err)}`, true)
       this.log.error({ messageId: msg.id, error: errorMsg }, 'Processing failed')
       await this.deliver(msg.chatId, errorMsg).catch(() => {})
       this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'legacy', errorMsg)
@@ -1258,21 +1352,21 @@ export class MessageProcessor {
       )
 
       if (result.timedOut) {
-        const errorMsg = 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.'
+        const errorMsg = await this.resolveAnswer(msg, 'Request timed out. The task was too complex for a single pass — try breaking it into smaller steps.', true)
         await responder.finalize(msg.chatId, ackMessageId, errorMsg)
         this.emitProcessEnd(msg.id, processStart, 'single_brain', 'timeout', 'evolving', errorMsg)
         return errorMsg
       }
 
       if (result.exitCode !== 0 && !result.output.trim()) {
-        const errorMsg = `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`
+        const errorMsg = await this.resolveAnswer(msg, `Claude encountered an error (exit ${result.exitCode}). ${result.stderr.slice(0, 200)}`, true)
         this.log.error({ exitCode: result.exitCode, stderrLength: result.stderr.length }, 'Claude CLI error')
         await responder.finalize(msg.chatId, ackMessageId, errorMsg)
         this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'evolving', errorMsg)
         return errorMsg
       }
 
-      const output = result.output.trim() || '(No output)'
+      const output = await this.resolveAnswer(msg, result.output.trim() || '(No output)')
       if (isNonSubstantiveOutput(output)) {
         this.log.warn(
           {
@@ -1305,7 +1399,7 @@ export class MessageProcessor {
 
       return output
     } catch (err) {
-      const errorMsg = `Internal error: ${err instanceof Error ? err.message : String(err)}`
+      const errorMsg = await this.resolveAnswer(msg, `Internal error: ${err instanceof Error ? err.message : String(err)}`, true)
       this.log.error({ messageId: msg.id, error: errorMsg }, 'Processing failed')
       await responder.finalize(msg.chatId, ackMessageId, errorMsg).catch(() => {})
       this.emitProcessEnd(msg.id, processStart, 'single_brain', 'error', 'evolving', errorMsg)
@@ -1510,7 +1604,7 @@ export class MessageProcessor {
         this.config.clinicalOverride === true,
       )
 
-      const output = result.finalText.trim() || '(No output)'
+      const output = await this.resolveAnswer(msg, result.finalText.trim() || '(No output)')
       if (isNonSubstantiveOutput(output)) {
         this.log.warn(
           {
@@ -1521,7 +1615,7 @@ export class MessageProcessor {
           'skipped history append — non-substantive dual-brain output',
         )
       } else {
-        this.history.append('assistant', result.finalText)
+        this.history.append('assistant', this.answerSelectors.has(msg.id) ? output : result.finalText)
         this.log.info(
           {
             event: 'history_assistant_appended',
@@ -1550,7 +1644,7 @@ export class MessageProcessor {
       return output
     } catch (err) {
       clearTimeout(ackTimer)
-      const errorMsg = this.formatDualBrainError(err, msg.id)
+      const errorMsg = await this.resolveAnswer(msg, this.formatDualBrainError(err, msg.id), true)
       const typed =
         err instanceof LeftHemisphereError ||
         err instanceof RightHemisphereError ||
@@ -1642,6 +1736,8 @@ export class MessageProcessor {
           typeof payload.p2Left === 'string' &&
           typeof payload.p2Right === 'string'
         ) {
+          // Candidate drafts must not bypass the final answer selector.
+          if (this.answerSelectors.has(msg.id)) return
           const hasRouterEvidence =
             payload.leftTools !== undefined ||
             payload.rightMode !== undefined
@@ -1710,7 +1806,7 @@ export class MessageProcessor {
         this.config.clinicalOverride === true,
       )
 
-      const output = result.finalText.trim() || '(No output)'
+      const output = await this.resolveAnswer(msg, result.finalText.trim() || '(No output)')
       if (isNonSubstantiveOutput(output)) {
         this.log.warn(
           {
@@ -1721,7 +1817,7 @@ export class MessageProcessor {
           'skipped history append — non-substantive dual-brain output',
         )
       } else {
-        this.history.append('assistant', result.finalText)
+        this.history.append('assistant', this.answerSelectors.has(msg.id) ? output : result.finalText)
         this.log.info(
           {
             event: 'history_assistant_appended',
@@ -1758,7 +1854,7 @@ export class MessageProcessor {
 
       return output
     } catch (err) {
-      const errorMsg = this.formatDualBrainError(err, msg.id)
+      const errorMsg = await this.resolveAnswer(msg, this.formatDualBrainError(err, msg.id), true)
       if (cardPosted) {
         await this.deliverNewBubbles(msg.id, msg.chatId, errorMsg).catch(() => {})
       } else {
