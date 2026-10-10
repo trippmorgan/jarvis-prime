@@ -8,7 +8,7 @@ import type { LeftRuntime } from './mode-state.js'
 import { MessageQueue } from '../queue/message-queue.js'
 import type { QueueMessage } from '../queue/types.js'
 import { ConversationHistory, type HistoryEntry } from '../context/history.js'
-import { RaceGate, askHarness, attestRound, sha256, type HarnessRaceConfig, REVIEW_SYSTEM, buildReviewPrompt, parseReview, formatCrossReview, shouldDeliverReview, type ToolEvidence, type Review, type ReviewRecord } from './harness-race.js'
+import { RaceGate, askHarness, attestRound, sha256, type HarnessRaceConfig, REVIEW_SYSTEM, buildReviewPrompt, parseReview, formatCrossReview, shouldDeliverReview, formatJevLine, isJevVerdict, type ToolEvidence, type Review, type ReviewRecord } from './harness-race.js'
 import { fetchConscience, formatConscienceDigest, citeConscience } from './conscience.js'
 import { buildRoundLabel, appendLabel, matchLabelCommand, latestRoundForChat, labelStats, formatLabelStatus } from './labels.js'
 import { PromptBuilder } from '../context/prompt-builder.js'
@@ -748,7 +748,17 @@ export class MessageProcessor {
     this.leftEvidence.delete(messageId)
     // Durable, private shadow collection is independent of reviewer latency and delivery.
     // Natural-path races only; never send clinical override traffic to this collector.
-    if (!this.config.clinicalOverride) collectShadow(cfg, { messageId, chatId, task: question, harness, jarvis, evidence: { harness: harnessEv, jarvis: jarvisEv } }, (status) => this.log.info({ event: 'jev_shadow', messageId, status }, 'advisory shadow'))
+    // 2026-10-10 (Tripp: "put the Jev line back in Telegram"): when the shadow prediction lands (~15-30 s on
+    // the GPU-swap service) one advisory line follows the answer. FRANK_JEV_TELEGRAM=0 silences it. Advisory
+    // only: it never changes delivery, ties, routing, the ledger records or the shadow store.
+    if (!this.config.clinicalOverride) collectShadow(cfg, { messageId, chatId, task: question, harness, jarvis, evidence: { harness: harnessEv, jarvis: jarvisEv } }, (status, result) => {
+      this.log.info({ event: 'jev_shadow', messageId, status }, 'advisory shadow')
+      if (status !== 'recorded' || !result || !isJevVerdict(result) || /^(0|false|off|no)$/i.test(process.env.FRANK_JEV_TELEGRAM ?? '')) return
+      const line = `Jev (advisory) ${formatJevLine(result).replace(/^• /, '')}`
+      void this.deliver(chatId, line).then(
+        () => this.log.info({ event: 'jev_line_delivered', messageId, verdict: result.verdict, pHarness: result.pHarness, strong: result.strong }, 'jev advisory line'),
+        (e: unknown) => this.log.warn({ event: 'jev_line_failed', messageId, err: e instanceof Error ? e.message : String(e) }, 'jev advisory line'))
+    })
     // The network's chain-attested conscience (lifecoin README §9) — both reviewers judge against the
     // same STANDING PRINCIPLES Prime uses, and the record cites the snapshot hash in force. Fail-soft.
     const conscience = await fetchConscience({ kernelUrl: cfg.ledgerKernelUrl, token: cfg.kernelToken })

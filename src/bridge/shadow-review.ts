@@ -4,7 +4,7 @@ import { createHash, randomInt } from 'node:crypto'
 import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { askJevJudge, type HarnessRaceConfig, type ToolEvidence } from './harness-race.js'
+import { askJevJudge, type HarnessRaceConfig, type ToolEvidence, type JevResult } from './harness-race.js'
 
 export interface ShadowInput {
   messageId: string; chatId: string; task: string; harness: string; jarvis: string
@@ -39,7 +39,7 @@ export function localService(url: string): boolean {
   try { const u = new URL(url); return u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname) && !u.username && !u.password && !u.search && !u.hash && u.pathname === '/' }
   catch { return false }
 }
-export async function evaluateShadow(cfg: HarnessRaceConfig, c: ShadowCase, dir = shadowDir(), fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function evaluateShadow(cfg: HarnessRaceConfig, c: ShadowCase, dir = shadowDir(), fetchImpl: typeof fetch = fetch, onResult?: (result: JevResult) => void): Promise<string> {
   return withShadowLock(dir, async () => {
     if (ids(dir, 'predictions').includes(c.id)) return 'already-recorded'
     if (!cfg.jevUrl || !localService(cfg.jevUrl)) throw new Error('Shadow requires a loopback HTTP Jev service')
@@ -48,23 +48,27 @@ export async function evaluateShadow(cfg: HarnessRaceConfig, c: ShadowCase, dir 
     if (!health.ok) throw new Error(`Health HTTP ${health.status}`)
     const h = await health.json() as { loaded?: boolean; device?: string }
     if (h.loaded !== true || h.device !== 'cpu') throw new Error('Shadow requires an already-loaded CPU model')
-    const result = await askJevJudge({ ...cfg, jevTimeoutMs: Math.min(cfg.jevTimeoutMs ?? 120000, 120000) }, c.task, c.harness, c.jarvis, localFetch)
+    const result = await askJevJudge({ ...cfg, jevTimeoutMs: cfg.jevTimeoutMs ?? 240000 }, c.task, c.harness, c.jarvis, localFetch)
     if ('error' in result) throw new Error(result.error)
     save(dir, 'predictions', c.id, { schema: 1, caseId: c.id, createdAt: new Date().toISOString(), advisory: true, result, inputPolicy: 'task:first3000; answers:first6000; truncation-marker appended; evidence excluded' })
+    try { onResult?.(result) } catch { /* advisory consumers cannot affect the record */ }
     return 'recorded'
   })
 }
 
 // One in-flight request. All cases persist even when busy; `drain` retries pending ones.
 let busy = false
-export function collectShadow(cfg: HarnessRaceConfig, input: ShadowInput, report: (status: string) => void = () => {}, dir = shadowDir()): void {
+// 2026-10-10 (Tripp: "put the Jev line back in Telegram"): `report` also receives the JevResult when a
+// prediction is recorded, so the caller can surface it as an advisory line. Delivery stays the caller's job.
+export function collectShadow(cfg: HarnessRaceConfig, input: ShadowInput, report: (status: string, result?: JevResult) => void = () => {}, dir = shadowDir()): void {
   if (!cfg.jevUrl) return
   try {
     const c = collectCase(input, dir)
     if (ids(dir, 'predictions').includes(c.id)) { report('already-recorded'); return }
     if (busy) { report('queued'); return }
     busy = true
-    void evaluateShadow(cfg, c, dir).then(() => report('recorded'), () => report('queued-service-unavailable'))
+    let recorded: JevResult | undefined
+    void evaluateShadow(cfg, c, dir, fetch, (r) => { recorded = r }).then(() => report('recorded', recorded), () => report('queued-service-unavailable'))
       .catch(() => {}).finally(() => { busy = false })
   } catch { try { report('collection-failed') } catch { /* logging cannot affect delivery */ } }
 }
