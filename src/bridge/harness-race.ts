@@ -93,6 +93,8 @@ export interface RoundRecord {
   first?: 'jarvis' | 'harness'
   // 2026-10-10 — Jev front-end route decision (bridge/jev-front.ts); hashed into the round evidence like the rest.
   route?: import('./jev-front.js').JevRouteRecord
+  // 2026-10-10 — Jev answer selection (bridge/jev-routing.ts): which answer was delivered and why.
+  selection?: { selected: 'harness' | 'jarvis'; reason: string; primaryPath: string; pHarness?: number; positionBias?: number; strong?: boolean; order1?: string; order2?: string; error?: string; ms?: number }
 }
 
 export function sha256(text: string): string {

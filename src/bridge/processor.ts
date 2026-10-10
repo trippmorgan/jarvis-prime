@@ -748,6 +748,14 @@ export class MessageProcessor {
       }
     }
     gate.selectionComplete = true
+    // Chain the delivery decision (PROCESS_RUN frank-answer-selection). The round record carries it too.
+    {
+      const r = gate.routingResult
+      gate.record.selection = { selected: route.selected, reason: route.reason, primaryPath: path,
+        ...(isJevVerdict(r) ? { pHarness: r.pHarness, positionBias: r.positionBias, strong: r.strong, order1: r.order1, order2: r.order2, ms: r.ms } : r ? { error: r.error, ms: r.ms } : {}) }
+      void attestRound(cfg, 'frank-answer-selection', gate.record, 'ok', JSON.stringify({ messageId: gate.record.messageId, startedAt: gate.record.startedAt, inboundHash: gate.record.inboundHash, harnessHash: harness ? sha256(harness) : null, jarvisHash: sha256(primary), selection: gate.record.selection }))
+        .then((st) => this.log.info({ event: 'jev_selection_attested', messageId: gate.record.messageId, status: st, selected: route.selected, reason: route.reason }, 'ledger attest'))
+    }
     const selected = route.selected === 'harness' ? harness! : primary
     // Error paths ordinarily omit history; a recovered harness answer is a real final turn.
     if (failed && route.selected === 'harness') this.history.append('assistant', selected)
@@ -770,7 +778,13 @@ export class MessageProcessor {
     if (!base) return null
     const cfg: HarnessRaceConfig = lane && lane !== base.model ? { ...base, model: lane } : base   // Jev-chosen harness lane (jev-front.ts)
     const gate = new RaceGate(msg.id, msg.chatId, msg.text)
-    if (route) gate.record.route = route
+    if (route) {
+      gate.record.route = route
+      // Chain the front-end decision the moment it is made (PROCESS_RUN frank-jev-route, evidence = the route record).
+      const outcome = 'error' in route ? 'failed' : 'ok'
+      void attestRound(cfg, 'frank-jev-route', gate.record, outcome, JSON.stringify({ messageId: msg.id, startedAt: gate.record.startedAt, inboundHash: gate.record.inboundHash, route }))
+        .then((st) => this.log.info({ event: 'jev_route_attested', messageId: msg.id, status: st, applied: 'applied' in route ? route.applied : false, lane: cfg.model }, 'ledger attest'))
+    }
     gate.routing = !!cfg.jevRouting && !!cfg.jevUrl && !this.config.clinicalOverride
     // Shared history minus the just-appended user turn, and minus the harness's OWN prior views —
     // seeing them made it comment on the earlier disagreement instead of answering (round 3, 2026-09-16).
