@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 
-describe('T18: Memory & Skill Preservation', () => {
+// These checks describe Prime's Claude Code layout on the SuperServer (user `tripp`). On any other host
+// (Voldemort runs as `joevoldemort`) the paths cannot exist, so the suite is skipped rather than failing.
+const onPrimeHost = existsSync('/home/tripp/.claude') && existsSync('/home/tripp/.openclaw/workspace')
+
+describe.skipIf(!onPrimeHost)('T18: Memory & Skill Preservation', () => {
   it('memory index exists', () => {
     expect(existsSync('/home/tripp/.claude/projects/-home-tripp/memory/MEMORY.md')).toBe(true)
   })
@@ -49,7 +53,7 @@ describe('T18: Memory & Skill Preservation', () => {
   })
 })
 
-describe('T19: Claude Code Skills & Agents & Rules', () => {
+describe.skipIf(!onPrimeHost)('T19: Claude Code Skills & Agents & Rules', () => {
   it('all skills registered', () => {
     const skills = ['network-status.md', 'dispatch.md', 'frank-status.md', 'station-check.md', 'deploy.md', 'dev-methodology.md']
     for (const skill of skills) {

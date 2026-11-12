@@ -582,6 +582,9 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       orchestrator,
       tier0Enabled: true,
       tier0Classifier: makeTestTier0(), shortMessageFastLaneEnabled: false,
+      // The tier-0 shortcut yields to an explicit /deep (dual) mode, like the short-message fast lane.
+      // Live default is single (FRANK_DEFAULT_MODE=single); the factory defaults to dual for the Wave 4 tests.
+      defaultMode: 'single',
     })
 
     processor.submit('123', 'alpha three quick hello', 'user1')
@@ -646,6 +649,7 @@ describe('MessageProcessor — Tier-0 classifier integration (Wave 8.7)', () => 
       orchestrator,
       // tier0Enabled: undefined (default false)
       tier0Classifier: makeTestTier0(), shortMessageFastLaneEnabled: false,
+      defaultMode: 'single', // see the quick_q test above: the shortcut never overrides /deep
     })
 
     processor.submit('123', 'alpha three quick hello', 'user1')
