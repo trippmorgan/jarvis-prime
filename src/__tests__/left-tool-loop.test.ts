@@ -105,3 +105,52 @@ describe("LEFT tool loop — locality rule (2026-09-17)", () => {
   });
 });
 
+
+describe("LEFT tool loop — notify_hub reaches Prime on the mesh (2026-10-20)", () => {
+  const notify = (id: string, message: string, to?: string[]) => ({ id, function: { name: "notify_hub", arguments: JSON.stringify({ message, to }) } });
+  beforeEach(() => { fetchMock.mockReset(); delete process.env.FRANK_LEFT_USE_OPENCLAW_CLI; delete process.env.FRANK_LEFT_TOOLS; });
+
+  it("advertises the tool and the rule that saying 'Prime has been notified' is a false claim", async () => {
+    script([{ content: "done" }]);
+    await spawnOpenclawAgent("hi", { timeoutMs: 5000 });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.tools.map((t: { function: { name: string } }) => t.function.name)).toContain("notify_hub");
+    expect(sentMessages(0)[0].content).toMatch(/FLEET: to tell Jarvis Prime .* call notify_hub/);
+  });
+
+  it("posts to the kernel and feeds the delivery result back as the tool message", async () => {
+    const posts: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => { posts.push({ url, body: JSON.parse(init.body as string) }); return new Response(JSON.stringify({ data: { id: 7 } }), { status: 201 }); });
+    process.env.KERNEL_TOKEN = "t"; process.env.LEDGER_KERNEL_URL = "http://kernel.test:3000";
+    try {
+      script([
+        { content: "", tool_calls: [notify("n1", "Grizzard voice clone is built at ~/grizzard; swap RFA to it")] },
+        { content: "Told Prime. Clone is at ~/grizzard." },
+      ]);
+      const r = await spawnOpenclawAgent("let Jarvis prime know what we did", { timeoutMs: 60_000 });
+      expect(posts).toHaveLength(1);
+      expect(posts[0].url).toBe("http://kernel.test:3000/api/v1/registry/events");
+      expect(posts[0].body).toMatchObject({ body: "Grizzard voice clone is built at ~/grizzard; swap RFA to it", metadata: { channel: "room", members: ["frank", "prime"], mentions: ["prime"] } });
+      const toolMsg = sentMessages(1).at(-1)!;
+      expect(toolMsg.role).toBe("tool");
+      expect(toolMsg.content).toMatch(/delivered to prime .* event 7/);
+      expect(r.output).toMatch(/Told Prime/);
+    } finally { vi.unstubAllGlobals(); globalThis.fetch = realFetch; delete process.env.KERNEL_TOKEN; delete process.env.LEDGER_KERNEL_URL; }
+  });
+
+  it("refuses a fourth notify in one turn and surfaces a kernel failure as text, never a throw", async () => {
+    vi.stubGlobal("fetch", async () => new Response('{"error":"AUTH_FAILED"}', { status: 401 }));
+    process.env.KERNEL_TOKEN = "t";
+    try {
+      script([
+        { content: "", tool_calls: [notify("a", "1"), notify("b", "2"), notify("c", "3"), notify("d", "4")] },
+        { content: "ok" },
+      ]);
+      await spawnOpenclawAgent("tell prime", { timeoutMs: 60_000 });
+      const tools = sentMessages(1).filter(m => m.role === "tool").map(m => m.content);
+      expect(tools.slice(0, 3).every(t => /kernel HTTP 401/.test(t))).toBe(true);
+      expect(tools[3]).toMatch(/already sent 3 messages/);
+    } finally { vi.unstubAllGlobals(); delete process.env.KERNEL_TOKEN; }
+  });
+});

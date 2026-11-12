@@ -1,5 +1,6 @@
 import { readFileSync, appendFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { DurableMemory } from './durable-memory.js'
 
 export interface HistoryEntry {
   role: 'user' | 'assistant'
@@ -12,35 +13,28 @@ const MAX_CONTEXT_CHARS = 6000
 
 export class ConversationHistory {
   private readonly path: string
+  readonly memory: DurableMemory
 
   constructor(path: string) {
     this.path = path
     const dir = dirname(path)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    this.memory = new DurableMemory(`${path}.sqlite`, path)
   }
 
   append(role: 'user' | 'assistant', content: string): void {
-    const entry: HistoryEntry = { role, content: content.slice(0, 2000), timestamp: Date.now() }
-    appendFileSync(this.path, JSON.stringify(entry) + '\n', 'utf-8')
+    const entry: HistoryEntry = { role, content, timestamp: Date.now() }
+    this.memory.append(entry)
+    // Compatibility cache only. The SQLite archive retains the complete message.
+    appendFileSync(this.path, JSON.stringify({ ...entry, content: content.slice(0, 2000) }) + '\n', 'utf-8')
     this.trim()
   }
 
   getRecent(maxEntries: number = 10): HistoryEntry[] {
-    if (!existsSync(this.path)) return []
-
-    const lines = readFileSync(this.path, 'utf-8').trim().split('\n').filter(Boolean)
-    const entries: HistoryEntry[] = []
-
-    for (const line of lines.slice(-maxEntries)) {
-      try {
-        entries.push(JSON.parse(line))
-      } catch {
-        // skip malformed lines
-      }
-    }
-
-    return entries
+    return this.memory.recent(maxEntries).map(entry => ({ ...entry, content: entry.content.slice(0, 2000) }))
   }
+
+  close(): void { this.memory.close() }
 
   formatForPrompt(maxEntries: number = 10): string {
     const entries = this.getRecent(maxEntries)

@@ -21,6 +21,15 @@ export interface RightHemisphereConfig {
   model: string
   /** Optional structured logger. */
   logger?: RightHemisphereLogger
+  /**
+   * 2026-09-04 — Optional `reasoning_effort` sent with the request
+   * ("none" | "low" | "medium" | "high"). GLM-5.3 on Ollama Cloud otherwise
+   * thinks at full effort (6-10K hidden tokens, 40-65 s per call). Unset =
+   * request body unchanged. Driven by FRANK_RIGHT_REASONING in .env.
+   */
+  reasoningEffort?: string
+  /** Evidence reviewers never receive a tool surface. */
+  disableTools?: boolean
 }
 
 /** Shape of the OpenAI-compatible chat completion response we actually consume. */
@@ -29,6 +38,7 @@ interface ChatCompletionResponse {
     message?: {
       role?: string
       content?: string
+      reasoning?: string
     }
   }>
   usage?: {
@@ -50,18 +60,23 @@ export class RightHemisphereClient implements HemisphereClient {
   private readonly gatewayToken: string
   private readonly model: string
   private readonly log?: RightHemisphereLogger
+  private readonly reasoningEffort?: string
+  private readonly disableTools: boolean
 
   constructor(config: RightHemisphereConfig) {
     this.gatewayUrl = config.gatewayUrl.replace(/\/+$/, "")
     this.gatewayToken = config.gatewayToken
     this.model = config.model
     this.log = config.logger
+    this.reasoningEffort = config.reasoningEffort?.trim() || undefined
+    this.disableTools = config.disableTools === true
   }
 
   async call(input: {
     system: string
     user: string
     timeoutMs: number
+    signal?: AbortSignal
   }): Promise<{ content: string; durationMs: number }> {
     const { system, user, timeoutMs } = input
     const url = `${this.gatewayUrl}/v1/chat/completions`
@@ -90,8 +105,10 @@ export class RightHemisphereClient implements HemisphereClient {
             { role: "user", content: user },
           ],
           stream: false,
+          ...(this.reasoningEffort ? { reasoning_effort: this.reasoningEffort } : {}),
+          ...(this.disableTools ? { tools: [], tool_choice: 'none' } : {}),
         }),
-        signal: controller.signal,
+        signal: input.signal ? AbortSignal.any([controller.signal, input.signal]) : controller.signal,
       })
     } catch (err) {
       clearTimeout(timeoutHandle)
@@ -150,13 +167,22 @@ export class RightHemisphereClient implements HemisphereClient {
       throw new RightHemisphereError("malformed response: invalid JSON", err)
     }
 
-    const content = parsed?.choices?.[0]?.message?.content
+    const message = parsed?.choices?.[0]?.message
+    // Ollama Cloud GLM-5.1 may return useful text in message.reasoning with
+    // message.content set to an empty string. Treat reasoning as valid right-
+    // hemisphere output so Frank does not lose that side of the deliberation.
+    const content =
+      typeof message?.content === "string" && message.content.trim()
+        ? message.content
+        : typeof message?.reasoning === "string" && message.reasoning.trim()
+          ? message.reasoning
+          : undefined
     if (typeof content !== "string") {
       this.log?.error(
         { event: "right_hemisphere_malformed", durationMs },
-        "right hemisphere response missing choices[0].message.content",
+        "right hemisphere response missing choices[0].message.content/reasoning",
       )
-      throw new RightHemisphereError("malformed response: missing choices[0].message.content")
+      throw new RightHemisphereError("malformed response: missing choices[0].message.content/reasoning")
     }
 
     this.log?.info(

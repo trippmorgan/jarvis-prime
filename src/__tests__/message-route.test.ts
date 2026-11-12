@@ -12,6 +12,17 @@ vi.mock('../claude/spawner.js', () => ({
 vi.mock('../claude/spawner-stream.js', () => ({
   spawnClaudeStream: vi.fn(),
 }))
+// Frank/Voldemort: openclaw is the default left runtime; route both openclaw
+// spawners through the existing spawnClaudeStream mock so test fixtures keep
+// driving via vi.mocked(spawnClaudeStream).
+vi.mock('../openclaw/spawner.js', async () => {
+  const { spawnClaudeStream } = await import('../claude/spawner-stream.js')
+  return { spawnOpenclawAgent: spawnClaudeStream }
+})
+vi.mock('../openclaw/spawner-stream.js', async () => {
+  const { spawnClaudeStream } = await import('../claude/spawner-stream.js')
+  return { spawnOpenclawAgentStream: spawnClaudeStream }
+})
 
 import { spawnClaude } from '../claude/spawner.js'
 import { spawnClaudeStream } from '../claude/spawner-stream.js'
@@ -96,9 +107,12 @@ describe('POST /message', () => {
 
     await new Promise((r) => setTimeout(r, 100))
 
+    // Frank/Voldemort default left runtime is openclaw (qwen3:30b-a3b local).
+    // The spawner is the same shared mock; assert prompt + cwd, not model
+    // (model is bound to the openclaw `main` agent, not passed per call).
     expect(spawnClaudeStream).toHaveBeenCalledWith(
       expect.stringContaining('Hello'),
-      expect.objectContaining({ model: 'sonnet' }),
+      expect.objectContaining({ workingDir: expect.any(String) }),
     )
   })
 

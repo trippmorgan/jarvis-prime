@@ -44,6 +44,17 @@ vi.mock('../claude/spawner-stream.js', async () => {
   return { spawnClaudeStream: spawnClaude }
 })
 
+// Frank/Voldemort: route the openclaw spawners (now the default left runtime)
+// through the same spawnClaude mock so test fixtures keep working as-is.
+vi.mock('../openclaw/spawner.js', async () => {
+  const { spawnClaude } = await import('../claude/spawner.js')
+  return { spawnOpenclawAgent: spawnClaude }
+})
+vi.mock('../openclaw/spawner-stream.js', async () => {
+  const { spawnClaude } = await import('../claude/spawner.js')
+  return { spawnOpenclawAgentStream: spawnClaude }
+})
+
 import { spawnClaude } from '../claude/spawner.js'
 
 type CallArg = { system: string; user: string; timeoutMs: number }

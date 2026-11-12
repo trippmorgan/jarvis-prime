@@ -31,6 +31,20 @@ vi.mock('../claude/spawner-stream.js', async () => {
   return { spawnClaudeStream: spawnClaude }
 })
 
+// 2026-05-01 — Frank/Voldemort flips the default left runtime from Claude CLI
+// to the openclaw CLI (qwen3:30b-a3b local). Route the openclaw spawners
+// through the same mocked function so existing fixtures (which drive
+// `spawnClaude`) keep working without per-test rewrites.
+vi.mock('../openclaw/spawner.js', async () => {
+  const { spawnClaude } = await import('../claude/spawner.js')
+  return { spawnOpenclawAgent: spawnClaude }
+})
+
+vi.mock('../openclaw/spawner-stream.js', async () => {
+  const { spawnClaude } = await import('../claude/spawner.js')
+  return { spawnOpenclawAgentStream: spawnClaude }
+})
+
 import { spawnClaude } from '../claude/spawner.js'
 
 const MOCK_TRACE: CallosumTrace = {
@@ -67,6 +81,7 @@ function makeProcessor(opts: {
   reporter?: Reporter
   shortMessageFastLaneEnabled?: boolean
   shortMessageMaxChars?: number
+  defaultMode?: 'single' | 'dual'
 }) {
   const tmpDir = mkdtempSync(join(tmpdir(), 'jp-test-'))
   const historyPath = opts.historyPath ?? join(tmpDir, 'history.jsonl')
@@ -102,7 +117,8 @@ function makeProcessor(opts: {
       // 2026-04-23 — /deep gates dual-brain behind opt-in mode. Production
       // starts in 'single'; tests stay in 'dual' to keep exercising the
       // orchestrator path without per-test toggling.
-      defaultMode: 'dual',
+      // 2026-05-01 — fast-lane tests can override via opts.defaultMode.
+      defaultMode: opts.defaultMode ?? 'dual',
     },
     deliverMock,
     log,
@@ -697,7 +713,7 @@ describe('MessageProcessor — short-message fast lane (Wave 8.7.1)', () => {
     vi.clearAllMocks()
   })
 
-  it('short statement skips dual-brain AND tier-0 classifier', async () => {
+  it('short statement in single mode skips dual-brain AND tier-0 classifier', async () => {
     vi.mocked(spawnClaude).mockResolvedValue({
       output: 'short reply', stderr: '', exitCode: 0, durationMs: 50, timedOut: false,
     })
@@ -715,6 +731,9 @@ describe('MessageProcessor — short-message fast lane (Wave 8.7.1)', () => {
       tier0Enabled: true,
       tier0Classifier: fakeTier0,
       shortMessageFastLaneEnabled: true,
+      // Frank/Voldemort 2026-05-01: fast-lane only fires in single-brain mode.
+      // Override the test default ('dual') to exercise pure fast-lane semantics.
+      defaultMode: 'single',
     })
 
     processor.submit('chat-sm', 'ok sounds good', 'user-sm')
@@ -724,6 +743,30 @@ describe('MessageProcessor — short-message fast lane (Wave 8.7.1)', () => {
     expect(orchestrator).not.toHaveBeenCalled()
     expect(classifySpy).not.toHaveBeenCalled()
     expect(deliverMock).toHaveBeenCalledWith('chat-sm', 'short reply')
+  })
+
+  // Frank/Voldemort 2026-05-01 — fast-lane yields to /deep dual mode so a
+  // user who toggled dual doesn't get terse instructions silently bypassed
+  // back to single-brain.
+  it('short statement in dual mode does NOT fast-lane — orchestrator runs', async () => {
+    const orchestrator = vi.fn().mockResolvedValue({
+      finalText: 'deep reply',
+      trace: MOCK_TRACE,
+    } satisfies BrainResult)
+
+    const { processor, deliverMock } = makeProcessor({
+      corpusCallosumEnabled: true,
+      orchestrator,
+      shortMessageFastLaneEnabled: true,
+      defaultMode: 'dual',
+    })
+
+    processor.submit('chat-dual-sm', 'ok sounds good', 'user-dual')
+    await waitFor(() => deliverMock.mock.calls.length > 0)
+
+    expect(orchestrator).toHaveBeenCalledTimes(1)
+    expect(spawnClaude).not.toHaveBeenCalled()
+    expect(deliverMock).toHaveBeenCalledWith('chat-dual-sm', 'deep reply')
   })
 
   it('message with "?" does NOT fast-lane — falls through to tier-0/dual-brain', async () => {

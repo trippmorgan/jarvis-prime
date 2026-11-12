@@ -1,6 +1,6 @@
 # Project State: Jarvis Prime — Unified Command Runtime
 
-> Last updated: 2026-04-21
+> Last updated: 2026-05-08
 
 ## Current Phase
 **Phase:** shipped — **v1.0 working model**
@@ -66,3 +66,30 @@
 | 2026-04-20 | Remove in-bridge PHI scanner | PHI is now handled out-of-band by the Claude-team clinical pipeline (`~/Documents/claude-team/clinical-archive/`) plus `CORPUS_CLINICAL_OVERRIDE`. Bridge-side regex was duplicating coverage and producing false-positive blocks on benign clinical-flavored prose. |
 | 2026-04-21 | Flip `spawnClaude` defaults to tools-on | Dispatcher was spawning Claude without tools (carryover from the 240s left-hemisphere timeout fix), so the router kept hallucinating "no shell in this session" cards to Telegram. Policy now: every Claude spawn gets Bash/Read/Edit/slash by default. Opt-out is explicit (`enableTools: false`). Restrict later only when a concrete problem shows up. The right-brain agent's W7 8-file workspace sandbox is untouched — that's the PHI/credentials firewall. |
 | 2026-04-21 | Ship v1 | Waves 1–8 delivered end-to-end, live-tested over Telegram, router + tools-on confirmed working. Tagged `v1.0.0` on `main`. |
+| 2026-05-08 | Post-outage Frank hotfixes | Restored Prime right brain to Ollama Cloud `glm-5.1`; patched GLM `message.reasoning` fallback; patched Telegram evolving delivery to retry plain text when Markdown parse fails; updated Voldemort BotSpace README. |
+
+## 2026-10-20 — reviewer sees the whole turn; LEFT can reach Prime
+- **Why:** Oct 19 rounds 8bab5913/d8aede10/0b791644 delivered glm-5.3 reviews that called things "unverified"
+  which the LEFT had checked in its first tool call. The reviewer saw only the last 8 steps at 160/240 chars.
+  Round 27d48004 ("let Jarvis prime know") — LEFT searched the box for a channel to Prime and found none.
+- **Evidence window:** `tool-evidence.ts` keeps 120 steps, 400-char inputs, 1500-char results (was 40/200/320);
+  `spawner.ts` tool_result evidence text 240 → 1500; new `reviewerEvidence()` in `jev-acceptance.ts` gives the
+  no-tools reviewer every step in chronological order (last 24 with 1200-char results, older ones compact, 36 k
+  budget, oldest dropped first, header says so). `candidateEvidence()` (Jev acceptance gate, small classifier)
+  unchanged. Reviewer system prompt: a claim supported by ANY step is verified; name what was not run.
+- **notify_hub:** `src/bridge/hub-notify.ts` — POST `/api/v1/registry/events` (bearer KERNEL_TOKEN from .env,
+  `LEDGER_KERNEL_URL`), channel `room`, members `[frank, …to]`, mentions `to` (default `prime`), chat_id
+  `room-frank-prime`. LEFT tool `notify_hub {message, to?}` in `spawner.ts`, max 3 per turn, never throws, result
+  text says delivered/failed; log `left_tool_call {tool:"notify_hub", to, ok, eventId}`; evidence row captured.
+  System prompt FLEET rule: saying "Prime has been notified" without a delivered result is a false claim.
+  Live probe before restart: event **115264** accepted (201).
+- **Also went live with this build:** the 10-12 `SKILL_HINTS` + `WORKSPACE_DIR` skill paths (artcraft/podcut) in
+  `affordance.ts`/`skill-registry.ts` — edited 22:07 that night, after the 21:53 build, so never live until now.
+- Tests: hub-notify 4, reviewer-evidence 5, left-tool-loop +3 (9), full suite 672 pass / 13 pre-existing fails
+  (verification T18/T19 env checks, processor tier-0). tsc clean. jarvis-prime restarted 07:1x EDT.
+  Chained: `voldemort-change-jev-reviewer-evidence-notify-hub`.
+- **Not done / next:** harness-side (:30100) evidence is still 240 chars per result (frank-v3, system unit, needs
+  Tripp's sudo restart); reviewer critique still becomes the delivered answer rather than triggering a fix pass.
+
+## 2026-10-24 — jev-shadow-drain retired
+Tripp chose "retire it" over fixing the CPU-only preflight. Drain timer+service removed from the user systemd tree, 18 stale pre-live advisory cases trashed (manifest in ~/.config/lifecoin/changes), live-era abstentions kept. jev-shadow-chain.timer unaffected. Details: docs/JEV-SHADOW.md. Follow-up (optional): delete src/cli/shadow-worker.ts and the deployment/ drain units in a future cleanup commit.

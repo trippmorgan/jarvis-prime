@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, statSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { collectCase, collectShadow, nextBlind, labelIndependent, exportIndependent, shadowStatus, evaluateShadow, localService } from '../bridge/shadow-review.js'
+import { collectCase, collectShadow, nextBlind, labelIndependent, exportIndependent, shadowStatus, evaluateShadow, localService, scoreShadow, calibrateShadow, writeCalibration, loadCalibration } from '../bridge/shadow-review.js'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import { askJevJudge } from '../bridge/harness-race.js'
 const dir = () => mkdtempSync(join(tmpdir(), 'frank-shadow-test-'))
 const input = { messageId: 'synthetic-test', chatId: 'test', task: 'Synthetic: add 1 and 1', harness: '2', jarvis: '3', evidence: { harness: [], jarvis: [] } }
@@ -11,6 +12,17 @@ const good = { p_a: .8, p_b: .2, position_bias: .1, head: 'shipped', order1: 'ha
 const response = (x: unknown) => new Response(JSON.stringify(x), { status: 200 })
 
 describe('advisory shadow collection', () => {
+  it.each(['cpu', 'cuda'])('routing explicitly accepts GPU-swap %s and persists an active decision', async device => {
+    const d = dir(), c = collectCase(input, d)
+    const f = vi.fn().mockResolvedValueOnce(response({ loaded: true, device, mode: 'gpu-swap', status: device === 'cpu' ? 'parked' : 'gpu', restore_pending: device === 'cuda' })).mockResolvedValueOnce(response(good))
+    const onResult = vi.fn()
+    await evaluateShadow(cfg, c, d, f, onResult, true)
+    expect(JSON.parse(f.mock.calls[1][1].body).delivery_gate).toBe(true)
+    expect(JSON.parse(readFileSync(join(d, 'predictions', c.id + '.json'), 'utf8')).advisory).toBe(false)
+    await evaluateShadow(cfg, c, d, f, onResult, true)
+    expect(onResult).toHaveBeenCalledTimes(2)
+    expect(f).toHaveBeenCalledTimes(2)
+  })
   it('persists duplicate-safe private cases and counts no weak judgments as independent', () => {
     const d = dir(), c = collectCase(input, d)
     expect(collectCase(input, d)).toEqual(c)
@@ -80,5 +92,40 @@ describe('advisory shadow collection', () => {
       reject(new Error('timeout')); await new Promise(r => setTimeout(r, 0))
       expect(shadowStatus(d).predictions).toBe(0)
     } finally { vi.unstubAllGlobals() }
+  })
+})
+
+describe('model labels and calibration (2026-10-30)', () => {
+  const pred = (d: string, id: string, pHarness: number) => { mkdirSync(join(d, 'predictions'), { recursive: true }); writeFileSync(join(d, 'predictions', id + '.json'), JSON.stringify({ schema: 1, caseId: id, createdAt: 'x', advisory: true,
+    result: { pHarness, pJarvis: 1 - pHarness, verdict: pHarness > .5 ? 'harness' : 'jarvis', strong: Math.abs(pHarness - .5) > .35, positionBias: 0, head: 'shipped', order1: 'h1', order2: 'h2', ms: 1 } })) }
+  it('keeps model labels out of human ground truth but scores them separately', () => {
+    const d = dir(), c = collectCase(input, d), blind = nextBlind('claude-cli', d)!
+    labelIndependent('claude-cli', c.id, blind.A === '2' ? 'A' : 'B', 'correct arithmetic', 'arithmetic', true, d, 'claude-sonnet')
+    expect(exportIndependent(d)).toEqual([])
+    expect(shadowStatus(d).independentDeclarations).toBe(1)
+    expect(() => labelIndependent('x', c.id, 'A', 'r', 's', true, d, 'bad name!')).toThrow(/identifier/)
+    pred(d, c.id, .9)
+    const sc = scoreShadow(d)
+    expect(sc.humanAgreement.labeled).toBe(0)
+    expect(sc.modelAgreement).toMatchObject({ labeled: 1, scored: 1, agree: 1, rate: 1, reviewers: { 'model:claude-sonnet': 1 } })
+    expect(sc.modelAgreement.byBand.ge25).toEqual({ n: 1, agree: 1, rate: 1 })
+  })
+  it('calibrates the route margin from labels and loads only a usable file', () => {
+    const d = dir(); const cases = Array.from({ length: 12 }, (_, i) => collectCase({ ...input, messageId: 'm' + i, task: 'task ' + i }, d))
+    // judge is right whenever it is decisive (|p-.5| >= .15) and wrong when it is a coin flip
+    const truthOf = new Map(cases.map((c, i) => { pred(d, c.id, i < 4 ? .55 : .9); return [c.id, i < 4 ? 'jarvis' : 'harness'] as const }))
+    for (let i = 0; i < 12; i++) {
+      const blind = nextBlind('claude-cli', d)!, truth = truthOf.get(blind.caseId)!
+      labelIndependent('claude-cli', blind.caseId, (blind.A === input.harness) === (truth === 'harness') ? 'A' : 'B', 'r', 'f', true, d, 'claude-sonnet')
+    }
+    const cal = calibrateShadow(d, 8, .7)
+    expect(cal.source).toBe('model'); expect(cal.labeled).toBe(12)
+    expect(cal.byMargin[0]).toMatchObject({ margin: .05, decisive: 12, agree: 8 })
+    expect(cal.routeMargin).toBe(.1)
+    expect(loadCalibration(d)).toBeNull()
+    writeCalibration(cal, d); expect(loadCalibration(d)?.routeMargin).toBe(.1)
+    writeFileSync(join(d, 'calibration.json'), JSON.stringify({ schema: 1, routeMargin: .01 })); expect(loadCalibration(d)).toBeNull()
+    writeFileSync(join(d, 'calibration.json'), 'not json'); expect(loadCalibration(d)).toBeNull()
+    expect(calibrateShadow(dir()).routeMargin).toBeNull()
   })
 })

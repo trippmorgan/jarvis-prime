@@ -62,3 +62,15 @@ Added a shared `flock` around shadow inference so the online collector and sched
 Installed/enabled `jev-shadow-drain.timer` and `.service`; the first production drain completed idle. Tests: 50 focused tests passed, including overlapping process lock refusal, recovery after request failure, diagnostics privacy, existing blind labeling, and shadow isolation. TypeScript build passed. Existing timeout increases in harness/server/shadow files were preserved as separate worktree changes rather than incorporated into this commit. The runtime uses those existing values; the worker requests a four-minute timeout, subject to the collector's configured limit.
 
 Live worker smoke passed: a separately persisted synthetic case in `/tmp/shadow-worker-live-smoke-yl1w8881` was drained by the standalone worker against the CPU service; one prediction, zero pending, zero independent declarations. Production queue remained empty. Bridge and CPU service remained healthy and the production timer recorded a successful idle run.
+
+## 2026-10-24 — advisory drain retired (Tripp: "retire it")
+
+The advisory shadow path was superseded on 2026-10-10 when Jev became the live answer selector (every round's verdict is now
+recorded through the delivery-gate path and chained by `jev-shadow-chain.timer`). `jev-shadow-drain.service` had been failed
+since 2026-09-28: its timer was never enabled, and the advisory branch of `evaluateShadow` (shadow-review.ts) still requires
+a CPU-loaded model, which the GPU-swap service on :30110 never reports. Retired rather than fixed:
+- `jev-shadow-drain.timer` and `.service` disabled and removed from `~/.config/systemd/user` (copies remain in `deployment/` as history).
+- 18 pre-live advisory cases (2026-09-28 … 2026-10-10, never judged) moved to the trash; manifest with sha256 per case at
+  `~/.config/lifecoin/changes/20261024-shadow-drain-retired-cases.json`. Live-era cases without a prediction (judge abstained; selection recorded) were left in place.
+- `jev-shadow-cpu.service` (already disabled since 2026-10-04) and `src/cli/shadow-worker.ts` untouched; the worker is now dead code.
+- Unchanged: `jev-shadow-chain.timer`, the delivery-gate path, labels, ledger chaining.

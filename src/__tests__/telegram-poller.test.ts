@@ -91,6 +91,27 @@ describe('TelegramPoller', () => {
       vi.unstubAllGlobals()
     })
 
+    it('retries as plain text when Markdown parse fails and returns message_id', async () => {
+      let callCount = 0
+      const fetchMock = vi.fn().mockImplementation(async () => {
+        callCount++
+        if (callCount === 1) {
+          return { ok: false, status: 400, text: async () => '{"ok":false,"description":"Bad Request: can\'t parse entities: Can\'t find end of the entity starting at byte offset 42"}' }
+        }
+        return { ok: true, json: async () => ({ ok: true, result: { message_id: 77 } }) }
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const result = await poller.sendMessageAndGetId('123', 'Hello *broken', 'Markdown')
+
+      expect(result).toBe(77)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      const secondCall = JSON.parse(fetchMock.mock.calls[1][1].body)
+      expect(secondCall.parse_mode).toBeUndefined()
+
+      vi.unstubAllGlobals()
+    })
+
     it('returns null on 400 response', async () => {
       vi.stubGlobal(
         'fetch',

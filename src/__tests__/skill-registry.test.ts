@@ -7,11 +7,22 @@ import {
 } from "../brain/skill-registry.js"
 
 describe("skill-registry — ALLOWED_SKILLS (W8-T3)", () => {
-  it("contains exactly the two Wave 8 skills", () => {
+  it("contains the two Wave 8 skills plus artcraft and podcut (2026-10-12)", () => {
     expect(ALLOWED_SKILLS).toEqual([
       "jarvis-dev-methodology",
       "research-methodology",
+      "artcraft",
+      "podcut",
     ])
+  })
+  it("accepts artcraft and podcut", () => {
+    expect(isAllowedSkill("artcraft")).toBe(true)
+    expect(isAllowedSkill("podcut")).toBe(true)
+  })
+  it("resolves artcraft/podcut SKILL.md under the same skills dir", () => {
+    const base = skillMdPath("research-methodology").replace(/research-methodology\/SKILL\.md$/, "")
+    expect(skillMdPath("artcraft")).toBe(`${base}artcraft/SKILL.md`)
+    expect(skillMdPath("podcut")).toBe(`${base}podcut/SKILL.md`)
   })
 
   it("is a readonly tuple (frozen at module load)", () => {

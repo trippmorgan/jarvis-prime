@@ -9,6 +9,7 @@
  */
 
 import type { ToolEvidence } from './dispatch-types.js'
+import { SKILL_HINTS } from "./skill-registry.js"
 
 export interface HistoryEntry {
   role: 'user' | 'assistant'
@@ -110,7 +111,12 @@ const PLANNING_INSTRUCTIONS_TEMPLATE = `You are also the dispatcher/router for t
 - The user never sees the dispatch or tools blocks; they are machine-consumed.`
 
 function formatAllowedSkills(skills: readonly string[]): string {
-  return skills.map((name) => `   - ${name}`).join('\n')
+  return skills
+    .map((name) => {
+      const hint = (SKILL_HINTS as Record<string, string | undefined>)[name]
+      return hint ? `   - ${name} — ${hint}` : `   - ${name}`
+    })
+    .join('\n')
 }
 
 const RIGHT_AFFORDANCE_SUFFIX =

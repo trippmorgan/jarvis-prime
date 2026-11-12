@@ -3,8 +3,10 @@ import { ModeState } from '../bridge/mode-state.js'
 import { matchDeepCommand } from '../bridge/processor.js'
 
 describe('ModeState', () => {
-  it('defaults to single', () => {
-    expect(new ModeState().current).toBe('single')
+  it('defaults to single + openclaw', () => {
+    const s = new ModeState()
+    expect(s.current).toBe('single')
+    expect(s.currentLeftRuntime).toBe('openclaw')
   })
 
   it('toggles single → dual → single', () => {
@@ -13,6 +15,19 @@ describe('ModeState', () => {
     expect(s.current).toBe('dual')
     expect(s.toggle()).toBe('single')
     expect(s.current).toBe('single')
+  })
+
+  it('setLeftRuntime swaps openclaw ↔ claude without touching mode', () => {
+    const s = new ModeState('dual')
+    expect(s.currentLeftRuntime).toBe('openclaw')
+    expect(s.setLeftRuntime('claude')).toBe('claude')
+    expect(s.currentLeftRuntime).toBe('claude')
+    expect(s.current).toBe('dual')
+    expect(s.setLeftRuntime('openclaw')).toBe('openclaw')
+  })
+
+  it('honours non-default initial left runtime', () => {
+    expect(new ModeState('single', 'claude').currentLeftRuntime).toBe('claude')
   })
 })
 
@@ -26,6 +41,12 @@ describe('matchDeepCommand', () => {
   it('matches /deep status', () => {
     expect(matchDeepCommand('/deep status')).toBe('status')
     expect(matchDeepCommand('/Deep Status')).toBe('status')
+  })
+
+  it('matches runtime-swap subcommands', () => {
+    expect(matchDeepCommand('/deep claude')).toBe('left:claude')
+    expect(matchDeepCommand('  /deep openclaw  ')).toBe('left:openclaw')
+    expect(matchDeepCommand('/Deep Claude')).toBe('left:claude')
   })
 
   it('returns null for non-matches', () => {

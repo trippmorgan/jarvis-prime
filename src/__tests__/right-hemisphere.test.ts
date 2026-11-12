@@ -64,6 +64,16 @@ function loggerSawSubstring(logger: MockLogger, substring: string): boolean {
 }
 
 describe("RightHemisphereClient", () => {
+  it('disables tools explicitly for evidence reviewers and carries the turn cancellation signal', async () => {
+    const f = vi.fn().mockResolvedValue(okResponse('review'))
+    vi.stubGlobal('fetch', f)
+    const external = new AbortController()
+    const client = new RightHemisphereClient({ gatewayUrl: 'http://local', gatewayToken: '', model: 'test', disableTools: true })
+    await client.call({ system: 'review', user: 'synthetic evidence', timeoutMs: 1000, signal: external.signal })
+    expect(JSON.parse(f.mock.calls[0][1].body)).toMatchObject({ tools: [], tool_choice: 'none' })
+    external.abort()
+    expect(f.mock.calls[0][1].signal.aborted).toBe(true)
+  })
   beforeEach(() => {
     vi.useRealTimers()
   })

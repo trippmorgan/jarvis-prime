@@ -6,3 +6,10 @@ dist/
 .tmp/
 coverage/
 .DS_Store
+
+# backups and scratch (added 2026-11-11)
+.env.bak*
+*.bak-*
+.claude/
+-p
+test-spawn*.mjs

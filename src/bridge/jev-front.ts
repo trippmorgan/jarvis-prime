@@ -15,6 +15,7 @@
  * confidence gate: below JEV_ROUTE_STRONG the existing router decides and Jev's view is only logged.
  */
 import type { HistoryEntry } from '../context/history.js'
+import { localService } from './shadow-review.js'
 
 export type JevRoute = 'quick' | 'tools' | 'web' | 'deep'
 export type JevFrontMode = 'off' | 'shadow' | 'harness' | 'all'
@@ -26,6 +27,10 @@ export interface JevFrontConfig {
   device: JevFrontDevice
   timeoutMs: number        // whole decision incl. the GPU swap; the swap itself is ~15–30 s on this box
   strong: number           // apply Jev's route only at/above this probability
+  /** 2026-10-29: per-route thresholds (ASSESSMENT-2026-10-16: the misses were all `quick` at 0.64–0.81 → quick 0.8). */
+  strongByRoute?: Partial<Record<JevRoute, number>>
+  /** 2026-10-29: decide on the parked CPU weights WHILE the single brain generates (no GPU window, no qwen eviction). */
+  parallel?: boolean
 }
 
 export const JEV_ROUTE_OPTIONS: Array<[JevRoute, string]> = [
@@ -55,6 +60,15 @@ export function laneForRoute(route: JevRoute): string {
   return route === 'quick' ? 'frank-chat' : route === 'deep' ? 'frank-deep' : 'frank'
 }
 
+export function routeThreshold(cfg: JevFrontConfig, route: JevRoute): number {
+  const t = cfg.strongByRoute?.[route]
+  return typeof t === 'number' && Number.isFinite(t) ? t : cfg.strong
+}
+/** Apply Jev's route only when its probability clears the (per-route) gate and the mode allows acting on it. */
+export function routeApplies(cfg: JevFrontConfig, r: JevRouteResult): boolean {
+  return isJevRoute(r) && r.confidence >= routeThreshold(cfg, r.route) && (cfg.mode === 'harness' || cfg.mode === 'all')
+}
+
 export function parseFrontMode(v: string | undefined): JevFrontMode {
   const s = (v ?? '').trim().toLowerCase()
   if (s === 'shadow' || s === 'harness' || s === 'all') return s
@@ -71,10 +85,12 @@ export function buildRouteState(text: string, history: HistoryEntry[]): string {
 export async function askJevRoute(cfg: JevFrontConfig, text: string, history: HistoryEntry[], fetchImpl: typeof fetch = fetch): Promise<JevRouteResult> {
   const start = Date.now()
   if (!cfg.jevUrl || cfg.mode === 'off') return { error: 'jev front disabled', ms: 0 }
+  if (!localService(cfg.jevUrl)) return { error: 'jev front requires a loopback HTTP service', ms: 0 }
   try {
     const res = await fetchImpl(`${cfg.jevUrl.replace(/\/$/, '')}/decide`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      redirect: 'error',
       body: JSON.stringify({
         state: buildRouteState(text, history), question: JEV_ROUTE_QUESTION, options: JEV_ROUTE_OPTIONS.map((o) => o[1]),
         head: 'shipped', device: cfg.device === 'cpu' ? 'cpu' : 'auto', skip_idle_wait: true,
@@ -91,6 +107,7 @@ export async function askJevRoute(cfg: JevFrontConfig, text: string, history: Hi
       if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) return { error: 'jev route: invalid probabilities', ms }
       p[route] = v
     }
+    if (Math.abs(Object.values(p).reduce((sum, v) => sum + v, 0) - 1) > 1e-5 || !d.hash || !['cpu', 'cuda'].includes(d.device ?? '')) return { error: 'jev route: invalid distribution or missing provenance', ms }
     const route = (Object.keys(p) as JevRoute[]).reduce((a, b) => (p[b] > p[a] ? b : a))
     return { route, confidence: p[route], p, ms, hash: String(d.hash ?? ''), device: String(d.device ?? '') }
   } catch (e: unknown) {
@@ -100,11 +117,12 @@ export async function askJevRoute(cfg: JevFrontConfig, text: string, history: Hi
 
 /** What the round record stores; hashed into the ledger evidence like everything else on the record. */
 export type JevRouteRecord =
-  | { mode: JevFrontMode; device: JevFrontDevice; jev: JevRoute; confidence: number; applied: boolean; lane: string; ms: number; hash: string }
-  | { mode: JevFrontMode; device: JevFrontDevice; error: string; ms: number }
+  | { mode: JevFrontMode; device: JevFrontDevice; jev: JevRoute; confidence: number; applied: boolean; lane: string; ms: number; hash: string; threshold?: number; parallel?: boolean; servedOn?: string }
+  | { mode: JevFrontMode; device: JevFrontDevice; error: string; ms: number; parallel?: boolean }
 
-export function routeRecord(cfg: JevFrontConfig, r: JevRouteResult, applied: boolean, lane: string): JevRouteRecord {
+export function routeRecord(cfg: JevFrontConfig, r: JevRouteResult, applied: boolean, lane: string, parallel = false): JevRouteRecord {
+  const device: JevFrontDevice = parallel ? 'cpu' : cfg.device
   return isJevRoute(r)
-    ? { mode: cfg.mode, device: cfg.device, jev: r.route, confidence: r.confidence, applied, lane, ms: r.ms, hash: r.hash }
-    : { mode: cfg.mode, device: cfg.device, error: r.error, ms: r.ms }
+    ? { mode: cfg.mode, device, jev: r.route, confidence: r.confidence, applied, lane, ms: r.ms, hash: r.hash, threshold: routeThreshold(cfg, r.route), parallel, servedOn: r.device }
+    : { mode: cfg.mode, device, error: r.error, ms: r.ms, parallel }
 }

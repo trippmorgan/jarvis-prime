@@ -17,26 +17,40 @@ export interface TelegramPollerConfig {
   botToken: string
   allowedChatIds: string[]
   pollTimeoutSecs: number
-  onMessage: (chatId: string, text: string, userId: string) => Promise<void>
+  onMessage: (chatId: string, text: string, userId: string, extraContext?: string) => Promise<void>
   logger: FastifyBaseLogger
+  /** Voldemort-prime vision lane. When set, inbound Telegram photos are
+   *  base64-fetched and POSTed to this OpenAI-compatible chat-completions
+   *  endpoint with model=visionModel and an image_url content block. The
+   *  returned description is injected into the text Claude sees, replacing
+   *  the legacy "[Photo received - no caption]" stub. Voldemort-only.
+   *  Leave undefined on other nodes for the legacy passthrough behavior. */
+  visionApiUrl?: string
+  visionModel?: string
 }
 
 export class TelegramPoller {
   private readonly apiBase: string
+  private readonly botToken: string
   private readonly allowedChatIds: Set<string>
   private readonly pollTimeout: number
   private readonly onMessage: TelegramPollerConfig['onMessage']
   private readonly log: FastifyBaseLogger
+  private readonly visionApiUrl?: string
+  private readonly visionModel?: string
   private offset = 0
   private running = false
   private abortController: AbortController | null = null
 
   constructor(config: TelegramPollerConfig) {
     this.apiBase = `https://api.telegram.org/bot${config.botToken}`
+    this.botToken = config.botToken
     this.allowedChatIds = new Set(config.allowedChatIds)
     this.pollTimeout = config.pollTimeoutSecs
     this.onMessage = config.onMessage
     this.log = config.logger
+    if (config.visionApiUrl) this.visionApiUrl = config.visionApiUrl
+    if (config.visionModel) this.visionModel = config.visionModel
   }
 
   async start(): Promise<void> {
@@ -132,6 +146,15 @@ export class TelegramPoller {
 
     if (!res.ok) {
       const errText = await res.text().catch(() => `HTTP ${res.status}`)
+
+      // Markdown parse failure — retry without formatting, same as sendMessage().
+      // The evolving-message path needs a message id, so a plain-text retry is
+      // much better than returning null and silently dropping the final answer.
+      if (parseMode && res.status === 400 && errText.includes("can't parse entities")) {
+        this.log.warn({ chatId }, 'sendMessageAndGetId Markdown parse failed — retrying as plain text')
+        return this.sendMessageAndGetId(chatId, text)
+      }
+
       this.log.error({ chatId, status: res.status, error: errText }, 'sendMessageAndGetId failed')
       return null
     }
@@ -239,23 +262,134 @@ export class TelegramPoller {
     }
 
     let text: string
+    let extraContext: string | undefined
     if (hasPhoto) {
       const caption = msg.caption?.trim()
-      text = caption
-        ? `[Photo received] ${caption}`
-        : '[Photo received — no caption. I can see you sent an image but cannot process it without a caption describing what you need.]'
       this.log.info({ chatId, userId, hasCaption: !!caption }, 'Telegram photo received')
+      // Voldemort vision dispatch — fetch the photo, send to voldemort-prime's
+      // vision lane (qwen3-vl:235b on Ollama Cloud), inject the description
+      // into THIS TURN'S prompt only via extraContext. The persisted user
+      // text stays minimal so future turns don't re-encounter old descriptions
+      // and confuse Claude into thinking the user re-sent the same image.
+      // Falls back to legacy passthrough behavior on any vision error.
+      text = caption ? `[Photo received] ${caption}` : '[Photo received]'
+      if (this.visionApiUrl && this.visionModel) {
+        const largest = pickLargestPhoto(msg.photo!)
+        const description = await this.describePhotoViaVision(largest.file_id, caption)
+        if (description) {
+          extraContext = `[vision-evidence — qwen3-vl:235b describes the attached image as]\n${description}`
+        } else {
+          extraContext = '[vision lane failed for this image — proceed without a description]'
+        }
+      } else if (!caption) {
+        // No vision lane configured AND no caption — leave the legacy stub
+        // so the user knows we received the photo but can't process it.
+        text = '[Photo received — no caption. I can see you sent an image but cannot process it without a caption describing what you need.]'
+      }
     } else {
       text = msg.text!
       this.log.info({ chatId, userId, text: text.slice(0, 80) }, 'Telegram message received')
     }
 
     try {
-      await this.onMessage(chatId, text, userId)
+      await this.onMessage(chatId, text, userId, extraContext)
     } catch (err) {
       this.log.error({ chatId, error: err instanceof Error ? err.message : String(err) }, 'Message handler error')
     }
   }
+
+  /**
+   * Two-step Telegram file fetch: getFile → download bytes.
+   * Returns the image as a data URL the OpenAI image_url block accepts.
+   */
+  private async fetchTelegramPhotoAsDataUrl(fileId: string): Promise<string | null> {
+    try {
+      const fileRes = await fetch(`${this.apiBase}/getFile?file_id=${encodeURIComponent(fileId)}`)
+      if (!fileRes.ok) {
+        this.log.warn({ fileId, status: fileRes.status }, 'getFile failed')
+        return null
+      }
+      const fileEnv = await fileRes.json() as { ok: boolean; result?: { file_path?: string } }
+      const filePath = fileEnv.result?.file_path
+      if (!filePath) return null
+      const downloadUrl = `https://api.telegram.org/file/bot${this.botToken}/${filePath}`
+      const dlRes = await fetch(downloadUrl)
+      if (!dlRes.ok) {
+        this.log.warn({ fileId, status: dlRes.status }, 'photo download failed')
+        return null
+      }
+      const buf = Buffer.from(await dlRes.arrayBuffer())
+      const mime = filePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg'
+      return `data:${mime};base64,${buf.toString('base64')}`
+    } catch (err) {
+      this.log.warn({ fileId, err: err instanceof Error ? err.message : String(err) }, 'photo fetch threw')
+      return null
+    }
+  }
+
+  /**
+   * Send the photo to voldemort-prime's vision lane and return the description
+   * text. Returns null on any failure (caller falls back to legacy stub).
+   */
+  private async describePhotoViaVision(fileId: string, caption?: string): Promise<string | null> {
+    if (!this.visionApiUrl || !this.visionModel) return null
+    const dataUrl = await this.fetchTelegramPhotoAsDataUrl(fileId)
+    if (!dataUrl) return null
+    try {
+      const res = await fetch(this.visionApiUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: this.visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    caption
+                      ? `Describe this image. The user added this caption: "${caption}". Address it in your description.`
+                      : 'Describe this image in 2-4 sentences. Note dominant colors, foreground subjects, and any text visible.',
+                },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+        }),
+      })
+      if (!res.ok) {
+        this.log.warn({ status: res.status, body: (await res.text()).slice(0, 200) }, 'vision API non-OK')
+        return null
+      }
+      const env = await res.json() as { choices: Array<{ message: { content: string } }> }
+      const content = env.choices?.[0]?.message?.content
+      if (!content) return null
+      this.log.info({ length: content.length }, 'vision lane returned description')
+      return content
+    } catch (err) {
+      this.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'vision API call threw')
+      return null
+    }
+  }
+}
+
+function pickLargestPhoto(
+  photos: Array<{ file_id: string; width: number; height: number; file_size?: number }>,
+): { file_id: string; width: number; height: number; file_size?: number } {
+  // Telegram returns the same image at multiple sizes — pick the largest by
+  // pixel area (file_size is optional and unreliable for our purposes).
+  let best = photos[0]!
+  let bestArea = best.width * best.height
+  for (let i = 1; i < photos.length; i++) {
+    const p = photos[i]!
+    const area = p.width * p.height
+    if (area > bestArea) {
+      best = p
+      bestArea = area
+    }
+  }
+  return best
 }
 
 function sleep(ms: number): Promise<void> {

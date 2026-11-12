@@ -44,6 +44,8 @@ export function makeRightClient(input: RightClientFactoryInput): HemisphereClien
     gatewayToken: input.gatewayToken,
     model: input.rightModel,
     logger: input.logger,
+    // 2026-09-04 — cap GLM hidden reasoning on the RIGHT (see right-hemisphere.ts).
+    reasoningEffort: process.env.FRANK_RIGHT_REASONING,
   })
   if (!input.rightBrainAgentEnabled) {
     return legacy

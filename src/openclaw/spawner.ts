@@ -1,6 +1,7 @@
 import { spawn, exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { scheduledFetchText } from "../../../tools/gpu-scheduler.mjs";
+import { notifyHub, hubNotifyEnv } from "../bridge/hub-notify.js";
 import type { SpawnOptions, SpawnResult } from "../claude/types.js";
 import type { StreamEvent } from "../claude/stream-formatter.js";
 
@@ -123,7 +124,19 @@ const LEFT_TOOL_SYSTEM =
   "the news, or any fact that changes over time, call web_search FIRST (kind \"news\" for recent events), " +
   "then read the best page with run_bash (curl -sL <url> | sed 's/<[^>]*>//g' | tr -s ' \\n' | head -c 6000). " +
   "Never answer such questions from memory, never ask which topic when the conversation already names it, " +
-  "and cite the source URLs you actually read.";
+  "and cite the source URLs you actually read. " +
+  // 2026-10-20: "let Jarvis Prime know" — the LEFT searched the box for a channel and found none (round 27d48004).
+  "FLEET: to tell Jarvis Prime (or argus, talos, dj) something, call notify_hub — it posts on the jarvis-os room " +
+  "mesh and is the ONLY way a message reaches them. Writing \"I'll let Prime know\" or \"Prime has been notified\" without a " +
+  "notify_hub result that says delivered is a false claim. Send one concise message with the facts and paths, after the work is done. " +
+  // 2026-10-29: Tripp asked Frank to "ask Claude CLI to check your work"; the LEFT ran `which claude`, got nothing
+  // (the service PATH lacked ~/.local/bin) and told him the CLI was not installed. It is. Durable rule:
+  "CLAUDE CLI: the Claude Code CLI IS installed and logged in on this box at " +
+  (process.env.CLAUDE_PATH || "/home/joevoldemort/.local/bin/claude") +
+  " (also on PATH as `claude`). To have Claude audit, review or extend work, run it non-interactively: " +
+  "run_bash: printf '%s' \"<task text, name the files to read>\" | claude --print --model sonnet --dangerously-skip-permissions " +
+  "(allow up to 600 s; for long audits start it with jobs.sh and report the job id). " +
+  "Never claim the CLI is missing unless `claude --version` fails in a run_bash call you made this turn.";
 
 const LEFT_TOOLS = [
   {
@@ -166,7 +179,27 @@ const LEFT_TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "notify_hub",
+      description:
+        "Send a message to Jarvis Prime (default) or other fleet agents on the jarvis-os room mesh. This is the " +
+        "only way to actually notify Prime/argus/talos/dj — saying you notified them does nothing. One concise " +
+        "message per task, with the concrete facts, paths and what you want them to do. Replies arrive on the mesh, not here.",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "What to tell them (plain text, under 2000 chars)." },
+          to: { type: "array", items: { type: "string" }, description: "Recipient agent ids, default [\"prime\"]. Known: prime, argus, talos, dj, scalpel." },
+        },
+        required: ["message"],
+      },
+    },
+  },
 ] as const;
+
+const MAX_NOTIFY_PER_TURN = 3;
 
 const WEBSEARCH_BIN = process.env.FRANK_WEBSEARCH_BIN ?? `${process.env.HOME ?? "/home/joevoldemort"}/.local/bin/websearch`;
 
@@ -347,6 +380,7 @@ async function runLeftToolLoop(prompt: string, opts: OpenclawSpawnOptions): Prom
   let nudges = 0;
   let inabilityNudges = 0;
   let wrapUpSent = false;
+  let notifies = 0;
 
   for (let iter = 0; iter < MAX_TOOL_ITERS; iter++) {
     const remaining = deadline - performance.now();
@@ -459,7 +493,7 @@ async function runLeftToolLoop(prompt: string, opts: OpenclawSpawnOptions): Prom
 
     for (const tc of toolCalls) {
       const fname = tc.function?.name;
-      let argObj: { command?: string; query?: string; kind?: string; max_results?: number } = {};
+      let argObj: { command?: string; query?: string; kind?: string; max_results?: number; message?: string; to?: string[] } = {};
       try {
         argObj = JSON.parse(tc.function?.arguments ?? "{}");
       } catch {
@@ -508,6 +542,27 @@ async function runLeftToolLoop(prompt: string, opts: OpenclawSpawnOptions): Prom
           if (isLocalCommand(command)) localExecuted = true;
           logLeftToolCall({ tool: "run_bash", command: command.slice(0, 300), resultChars: result.length, ms: Math.round(performance.now() - tcStart) });
         }
+      } else if (fname === "notify_hub") {
+        const message = String(argObj.message ?? "").trim();
+        const to = Array.isArray(argObj.to) ? argObj.to.map(String) : undefined;
+        if (!message) {
+          result = "(notify_hub called with empty message)";
+        } else if (++notifies > MAX_NOTIFY_PER_TURN) {
+          result = `(notify_hub refused: already sent ${MAX_NOTIFY_PER_TURN} messages this turn — finish your answer)`;
+        } else {
+          if (onEvent) {
+            try {
+              onEvent({ type: "assistant", message: { content: [{ type: "tool_use", name: "NotifyHub", input: { to: to ?? ["prime"], message: message.slice(0, 200) } }] } });
+            } catch {
+              /* UX callbacks never break the loop */
+            }
+          }
+          const r = await notifyHub({ message, to }, hubNotifyEnv(), fetch, Math.max(5_000, Math.min(15_000, deadline - performance.now())));
+          result = r.text;
+          executedAny = true;
+          localExecuted = true;
+          logLeftToolCall({ tool: "notify_hub", to: r.to, chars: message.length, ok: r.ok, eventId: r.eventId ?? null, resultChars: result.length, ms: Math.round(performance.now() - tcStart) });
+        }
       } else {
         result = `(unknown tool: ${fname})`;
       }
@@ -515,7 +570,7 @@ async function runLeftToolLoop(prompt: string, opts: OpenclawSpawnOptions): Prom
       // formatStreamEvent ignores non-assistant events, so the Telegram progress bubble is unaffected.
       if (onEvent) {
         try {
-          onEvent({ type: "user", message: { content: [{ type: "tool_result", name: fname, input: fname === "web_search" ? { query: argObj.query } : { command: argObj.command }, text: String(result).replace(/\s+/g, " ").slice(0, 240) }] } });
+          onEvent({ type: "user", message: { content: [{ type: "tool_result", name: fname, input: fname === "web_search" ? { query: argObj.query } : fname === "notify_hub" ? { to: argObj.to ?? ["prime"], message: String(argObj.message ?? "").slice(0, 200) } : { command: argObj.command }, text: String(result).replace(/\s+/g, " ").slice(0, 1500) }] } });  // 2026-10-20: was 240; the reviewer saw almost nothing
         } catch {
           /* UX callbacks never break the loop */
         }

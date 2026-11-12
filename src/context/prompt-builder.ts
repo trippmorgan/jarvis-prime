@@ -25,15 +25,25 @@ export class PromptBuilder {
     this.loadSkills()
   }
 
-  build(userMessage: string): string {
+  build(userMessage: string, extraContext?: string): string {
     const parts: string[] = []
 
     parts.push(this.getSystemContext())
 
+    const memoryBlock = this.history.memory.retrieve(userMessage)
+    if (memoryBlock) parts.push(memoryBlock)
+
     const historyBlock = this.history.formatForPrompt(10)
     if (historyBlock) parts.push(historyBlock)
 
-    parts.push(`## Current message from Tripp\n${userMessage}`)
+    // Per-turn ephemeral context (e.g. Voldemort vision-evidence). Appended
+    // to the current message so Claude sees it this turn, but the caller
+    // is responsible for NOT writing it to history — keeps future turns
+    // from re-encountering stale image descriptions.
+    const currentMessage = extraContext
+      ? `## Current message from Tripp\n${userMessage}\n\n${extraContext}`
+      : `## Current message from Tripp\n${userMessage}`
+    parts.push(currentMessage)
 
     return parts.join('\n\n')
   }

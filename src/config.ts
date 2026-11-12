@@ -30,6 +30,13 @@ const baseSchema = z.object({
   OPENCLAW_GATEWAY_TOKEN: z.string().default(""),
   TELEGRAM_BOT_TOKEN: z.string().default(""),
   TRIPP_CHAT_ID: z.string().default("8048875001"),
+  // Voldemort-only: vision lane backend (qwen3-vl:235b on Ollama Cloud,
+  // served by voldemort-prime API). When set, inbound Telegram photos are
+  // base64-fetched and POSTed here for description; the result is injected
+  // into the text Claude sees. Leave empty on other nodes for the legacy
+  // "no caption stub" passthrough behavior.
+  VOLDEMORT_VISION_API_URL: z.string().default(""),
+  VOLDEMORT_VISION_MODEL: z.string().default(""),
   WORKSPACE_DIR: z.string().default("/home/tripp/.openclaw/workspace"),
   DELIVERY_QUEUE_DIR: z.string().default("/home/tripp/.openclaw/delivery-queue"),
   // Bridge process working directory — passed as cwd to every Claude spawn and
@@ -71,6 +78,12 @@ const baseSchema = z.object({
   LANGFUSE_SECRET_KEY: z.string().default(""),
   LANGFUSE_FLUSH_AT: z.coerce.number().default(10),
   LANGFUSE_FLUSH_INTERVAL_MS: z.coerce.number().default(5_000),
+  // Frank/Voldemort left-brain runtime selector. Defaults to 'openclaw' so
+  // the local qwen3:30b-a3b model fronts the brain via the openclaw CLI with
+  // full tool surface (per the all-local SPEC mandate). Set USE_CLAUDE_LEFT=true
+  // to default-boot in the Anthropic Claude CLI fallback. /deep claude and
+  // /deep openclaw flip mid-session.
+  USE_CLAUDE_LEFT: boolFromEnv(false),
 });
 
 /**

@@ -56,7 +56,7 @@ describe('askHarness', () => {
     server = http.createServer((_req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: '[no response]' } }], _meta: { mode: 'speech' } })) })
     await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()))
     const port = (server.address() as { port: number }).port
-    await expect(askHarness({ url: `http://127.0.0.1:${port}`, model: 'frank', timeoutMs: 5000 }, 'you good?', [])).rejects.toThrow(/junk content \(mode speech\)/)
+    await expect(askHarness({ url: `http://127.0.0.1:${port}`, model: 'frank', timeoutMs: 5000 }, 'you good?', [])).rejects.toThrow(/junk content \(mode speech, \d+ chars\)/)
   })
 
   it('carries the harness memory block from _meta when present', async () => {

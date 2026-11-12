@@ -37,6 +37,42 @@ export interface HarnessRaceConfig {
   jevRouteTimeoutMs?: number
   jevCandidateWaitMs?: number
   jevRouteMargin?: number
+  jevExecutionPlans?: boolean
+  jevReviewTimeoutMs?: number
+  jevSelectionBudgetMs?: number
+  jevAcceptMin?: number      // 2026-10-29: both acceptance orders must prefer DELIVER above this (default .5)
+  jevSignal?: AbortSignal    // 2026-10-29: the coordinator's step budget; a timed-out judge releases the shadow flock
+  jevToolsExecutor?: 'left' | 'harness'  // 2026-10-31: who executes a tools/web plan — the LEFT loop or the :30100 harness
+  jevCompetingPrimaryGraceMs?: number  // 2026-10-31: competing plan — once the harness answered, how long to wait for the LEFT before gating the harness answer alone (default 45 s)
+  jevCompetingMinElapsedMs?: number    // 2026-10-31: …but never before this much of the turn has elapsed (default 120 s), so a quick harness answer does not skip the pair judge
+  jevQuickSkills?: string[]  // 2026-10-31: a `quick` plan whose message affords one of these harness resonance skills (GET /affordance) executes on the harness too
+  jevSettledSkills?: string[] // 2026-11-11: skills whose probes settle the turn — affordance match routes without Jev, and a clean harness completion delivers without the gate
+}
+
+/** 2026-11-01/02: the harness's own deterministic checks on its final answer (frank-v3 referents.mjs / pickup.mjs). */
+export interface HarnessCompletion {
+  loopFinished: boolean
+  executionObserved: boolean
+  skill: string | null
+  referents: { checked: number; unsupported: string[]; retried: boolean } | null
+  pickup: { required: string[]; missing: string[]; retried: boolean } | null
+}
+export function parseHarnessCompletion(c: unknown): HarnessCompletion | undefined {
+  if (!c || typeof c !== 'object') return undefined
+  const o = c as Record<string, any>
+  const list = (v: unknown) => Array.isArray(v) ? v.map(String) : []
+  return { loopFinished: o.loop_finished === true, executionObserved: o.execution_observed === true, skill: typeof o.skill === 'string' ? o.skill : null,
+    referents: o.referents && typeof o.referents === 'object' ? { checked: Number(o.referents.checked ?? 0), unsupported: list(o.referents.unsupported), retried: o.referents.retried === true } : null,
+    pickup: o.pickup && typeof o.pickup === 'object' ? { required: list(o.pickup.required), missing: list(o.pickup.missing), retried: o.pickup.retried === true } : null }
+}
+/** A turn is settled when the skill the affordance probe matched is the one that ran and both deterministic checks are clean. */
+export function settledBy(c: HarnessCompletion | undefined, skill: string): string | null {
+  if (!c) return 'no-completion'
+  if (c.skill !== skill) return `skill:${c.skill ?? 'none'}`
+  if (!c.loopFinished || !c.executionObserved) return 'loop-unfinished'
+  if (c.referents && c.referents.unsupported.length) return `referents:${c.referents.unsupported.length}`
+  if (c.pickup && c.pickup.missing.length) return `pickup:${c.pickup.missing.join(',')}`
+  return null
 }
 
 export interface HarnessAnswer {
@@ -45,6 +81,7 @@ export interface HarnessAnswer {
   ms: number
   memory?: string        // network-memory atoms the harness was given for this answer (_meta.memory), if any
   evidence?: ToolEvidence[] // tools the harness actually ran for this answer (_meta.evidence), if any
+  completion?: HarnessCompletion // the harness's deterministic checks (_meta.completion), if any
 }
 
 /**
@@ -94,11 +131,27 @@ export interface RoundRecord {
   // 2026-10-10 — Jev front-end route decision (bridge/jev-front.ts); hashed into the round evidence like the rest.
   route?: import('./jev-front.js').JevRouteRecord
   // 2026-10-10 — Jev answer selection (bridge/jev-routing.ts): which answer was delivered and why.
-  selection?: { selected: 'harness' | 'jarvis'; reason: string; primaryPath: string; pHarness?: number; positionBias?: number; strong?: boolean; order1?: string; order2?: string; error?: string; ms?: number }
+  selection?: { selected: 'harness' | 'jarvis' | 'reviewer'; reason: string; primaryPath: string; pHarness?: number; positionBias?: number; strong?: boolean; order1?: string; order2?: string; error?: string; ms?: number; plan?: string; source?: string; reviews?: number; judgments?: number }
 }
 
 export function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+/** The harness prefaces a report its own completion check could not verify. On the Jev path the acceptance gate is
+ *  the verifier, so the sentence is stripped before the gate sees it (2026-10-31, Tripp). */
+export const HARNESS_UNVERIFIED_PREFACE = /^Execution observed; task completion has not been independently verified\.\s*/
+
+/** 2026-10-31 (Gibson: affordance pickup is the harness's own perception): which resonance skill does this message
+ *  afford, per the harness's skill library (GET /affordance?q=). null when none, or on any failure. */
+export async function harnessAffordance(cfg: HarnessRaceConfig, question: string, timeoutMs = 1500): Promise<string | null> {
+  try {
+    const u = new URL('/affordance', cfg.url); u.searchParams.set('q', question)
+    const res = await fetch(u, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return null
+    const body = await res.json() as { skill?: unknown }
+    return typeof body.skill === 'string' && body.skill ? body.skill : null
+  } catch { return null }
 }
 
 /** POST to the harness with node:http (global fetch aborts >300 s on headers). */
@@ -119,12 +172,13 @@ export function askHarness(cfg: HarnessRaceConfig, question: string, history: Hi
         res.setEncoding('utf8')
         res.on('data', (c) => { buf += c })
         res.on('end', () => {
-          if (res.statusCode !== 200) return reject(new Error(`harness HTTP ${res.statusCode}: ${buf.slice(0, 160)}`))
+          // 2026-10-29 (audit): log length + hash, never response text.
+          if (res.statusCode !== 200) return reject(new Error(`harness HTTP ${res.statusCode}: ${buf.length} chars sha256 ${sha256(buf).slice(0, 12)}`))
           try {
             const d = JSON.parse(buf)
             const text = String(d.choices?.[0]?.message?.content ?? '').trim()
             const mode = String(d._meta?.mode ?? 'unknown')
-            if (isJunkAnswer(text)) return reject(new Error(`harness returned empty/junk content (mode ${mode}): ${JSON.stringify(text.slice(0, 40))}`))
+            if (isJunkAnswer(text)) return reject(new Error(`harness returned empty/junk content (mode ${mode}, ${text.length} chars)`))
             // 2026-09-18 22:28: "Task escalated after 13 attempts… recorded for jarvis-dispatch" reached Telegram as the
             // harness view. An escalation notice is a harness-internal outcome, not an answer for Tripp.
             if (mode === 'frank-escalated' || /^Task escalated after \d+ attempts/i.test(text)) return reject(new Error(`harness escalated without an answer (mode ${mode})`))
@@ -132,7 +186,7 @@ export function askHarness(cfg: HarnessRaceConfig, question: string, history: Hi
             const evidence = Array.isArray(d._meta?.evidence)
               ? (d._meta.evidence as Array<Record<string, unknown>>).map((e) => ({ tool: String(e.tool ?? '?'), input: String(e.args ?? ''), result: String(e.result ?? ''), status: String(e.status ?? '') }))
               : undefined
-            resolve({ text, mode, ms: Date.now() - start, memory, evidence })
+            resolve({ text, mode, ms: Date.now() - start, memory, evidence, completion: parseHarnessCompletion(d._meta?.completion) })
           } catch (e) {
             reject(new Error(`harness bad JSON: ${buf.slice(0, 120)}`))
           }
@@ -202,6 +256,13 @@ export class RaceGate {
   reviewStarted = false
   routing = false
   selectionComplete = false
+  executor: 'left' | 'harness' = 'left'   // 2026-10-31: which lane produced the primary answer
+  competing = false            // 2026-10-31: competing plan — the harness is a candidate, the LEFT the primary
+  processStart = Date.now()
+  selectionStarted = false
+  earlyDelivered = false       // 2026-10-31: the harness answer was gated and delivered while the LEFT was still generating
+  settledSkill: string | null = null   // 2026-11-11: the affordance probe matched a settled skill — routed without a Jev window
+  settledReason: string | null = null  // 2026-11-11: set once the harness completion is clean — the coordinator delivers without the gate
   routingResult?: JevResult
   readonly harnessDone: Promise<void>
   private resolveHarness!: () => void
@@ -279,6 +340,7 @@ export interface JevVerdict {
   verdict: 'harness' | 'jarvis' | 'tie'
   strong: boolean           // p < 0.35 or p > 0.65; routing has a separate both-order policy.
   positionBias: number      // service's (P(A|order1)+P(A|order2))/2 − 0.5
+  pHarnessOrders?: [number, number]   // 2026-10-29: per-order P(harness) when the service returns them
   head: string
   order1: string            // decision hashes from the service's decisions.jsonl
   order2: string
@@ -303,20 +365,23 @@ export async function askJevJudge(cfg: HarnessRaceConfig, task: string, harnessA
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ task: clip(task, 3000), a: clip(harnessAnswer), b: clip(jarvisAnswer), head: 'shipped', ...(cfg.jevDeliveryGate ? { delivery_gate: true } : {}) }),
-      signal: AbortSignal.timeout(cfg.jevTimeoutMs ?? 240_000),
+      signal: cfg.jevSignal ? AbortSignal.any([cfg.jevSignal, AbortSignal.timeout(cfg.jevTimeoutMs ?? 240_000)]) : AbortSignal.timeout(cfg.jevTimeoutMs ?? 240_000),
     })
     const ms = Date.now() - start
     if (!res.ok) return { error: `jev HTTP ${res.status}`, ms }
-    const d = await res.json() as { ok?: boolean; error?: string; p_a?: number; p_b?: number; verdict?: string; position_bias?: number; head?: string; order1?: string; order2?: string }
+    const d = await res.json() as { ok?: boolean; error?: string; p_a?: number; p_b?: number; verdict?: string; position_bias?: number; head?: string; order1?: string; order2?: string; p_a_order1?: number; p_a_order2?: number }
     if (d.ok === false || typeof d.p_a !== 'number') return { error: String(d.error ?? 'jev bad response'), ms }
     const validP = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1
     if (d.head !== 'shipped' || !validP(d.p_a) || !validP(d.p_b) || Math.abs(d.p_a + d.p_b - 1) > 1e-5 || typeof d.position_bias !== 'number' || !Number.isFinite(d.position_bias) || Math.abs(d.position_bias) > .5 || !d.order1 || !d.order2) return { error: 'jev invalid probabilities, provenance, or non-shipped head', ms }
     const p = d.p_a
+    const orders = validP(d.p_a_order1) && validP(d.p_a_order2) ? [d.p_a_order1, d.p_a_order2] as [number, number] : undefined
     return {
       pHarness: p, pJarvis: typeof d.p_b === 'number' ? d.p_b : 1 - p,
-      verdict: p === 0.5 ? 'tie' : p > 0.5 ? 'harness' : 'jarvis',
+      // 2026-10-29: same near-tie tolerance as the service (1e-6); the service's own verdict wins when it says tie.
+      verdict: d.verdict === 'tie' || Math.abs(p - 0.5) < 1e-6 ? 'tie' : p > 0.5 ? 'harness' : 'jarvis',
       strong: p < JEV_STRONG_LOW || p > JEV_STRONG_HIGH,
       positionBias: typeof d.position_bias === 'number' ? d.position_bias : 0,
+      ...(orders ? { pHarnessOrders: orders } : {}),
       head: String(d.head ?? 'shipped'), order1: String(d.order1 ?? ''), order2: String(d.order2 ?? ''), ms,
     }
   } catch (e) {
@@ -329,6 +394,7 @@ export function formatJevLine(j: JevResult | null | undefined): string {
   if (!j) return ''
   if (!isJevVerdict(j)) return `• jev (typed): unavailable — ${j.error}`
   const pct = (x: number) => `${Math.round(x * 100)}%`
+  if (j.verdict === 'tie') return `• jev (typed, both orders): even — harness ${pct(j.pHarness)} / dual-brain ${pct(j.pJarvis)}`
   const who = j.verdict === 'harness' ? 'harness' : 'dual-brain'
   const bias = Math.abs(j.positionBias) >= 0.1 ? `, position bias ${j.positionBias > 0 ? '+' : ''}${j.positionBias.toFixed(2)}` : ''
   return `• jev (typed, both orders): ${j.strong ? 'clearly ' : 'slightly '}prefers the ${who} answer — harness ${pct(j.pHarness)} / dual-brain ${pct(j.pJarvis)}${bias}`
